@@ -1,6 +1,6 @@
 """Widget that renders one tweet (or repost) from the sidecar's plain-JSON Tweet."""
 
-from gi.repository import Adw, Gtk, Pango
+from gi.repository import Adw, Gdk, Gtk, Pango
 
 from perch import format as fmt
 from perch import images
@@ -47,54 +47,172 @@ def _body(tweet: dict) -> Gtk.Label | None:
     return body
 
 
+class _Slide(Gtk.Box):
+    """Clickable gallery slide. Not a Gtk.Button: a button claims the pointer on press, which
+    stops Adw.Carousel from ever seeing a drag. This acts on release, ignores releases after the
+    pointer moved (a swipe), never takes focus on click, and opens with Enter/Space when focused."""
+
+    DRAG_SLOP = 8  # px
+
+    def __init__(self, child: Gtk.Widget, tooltip: str, on_activate):
+        super().__init__(focusable=True, hexpand=True, tooltip_text=tooltip)
+        self.add_css_class("media-button")
+        self.append(child)
+        self.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
+        self._on_activate = on_activate
+        self._press = None
+
+        click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+        click.connect("pressed", lambda _g, _n, x, y: setattr(self, "_press", (x, y)))
+        click.connect("released", self._on_released)
+        click.connect("cancel", lambda *_: setattr(self, "_press", None))  # the carousel took over
+        self.add_controller(click)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key)
+        self.add_controller(keys)
+
+    def _on_released(self, _gesture, _n_press: int, x: float, y: float) -> None:
+        press, self._press = self._press, None
+        if press and abs(x - press[0]) <= self.DRAG_SLOP and abs(y - press[1]) <= self.DRAG_SLOP:
+            self._on_activate()
+
+    def _on_key(self, _controller, keyval, _keycode, _state) -> bool:
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            self._on_activate()
+            return True
+        return False
+
+
+def _media_cell(
+    media: dict, index: int, gallery: list[dict], controller, post_url: str | None, height: int, compact: bool, slide: bool = False
+) -> Gtk.Widget:
+    """One thumbnail (with video/GIF badges) that opens the viewer at ``index``: a Gtk.Button, or a
+    swipe-friendly _Slide when it lives in a gallery carousel."""
+    picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True, hexpand=True)
+    picture.set_size_request(-1, height)
+    picture.set_overflow(Gtk.Overflow.HIDDEN)
+    picture.add_css_class("media")
+    images.load(fmt.media_thumb(media), lambda tex, p=picture: tex and p.set_paintable(tex))
+    cell: Gtk.Widget = picture
+    if media.get("type") in ("VIDEO", "GIF"):
+        overlay = Gtk.Overlay(child=picture)
+        badge = _label("GIF" if media["type"] == "GIF" else "▶ Video", "media-badge")
+        badge.set_halign(Gtk.Align.START)
+        badge.set_valign(Gtk.Align.END)
+        badge.set_margin_start(8)
+        badge.set_margin_bottom(8)
+        overlay.add_overlay(badge)
+        if not compact:
+            play = Gtk.Image.new_from_icon_name("media-playback-start-symbolic")
+            play.set_pixel_size(28)
+            play.set_halign(Gtk.Align.CENTER)
+            play.set_valign(Gtk.Align.CENTER)
+            play.add_css_class("media-play")
+            overlay.add_overlay(play)
+        cell = overlay
+    if controller is None:
+        return cell
+    kind = {"VIDEO": "Play video", "GIF": "Play GIF"}.get(media.get("type"), "View image")
+    if slide:
+        return _Slide(cell, kind, lambda: controller.open_media(gallery, index, post_url))
+    # A button (not a click gesture) so it is keyboard reachable and doesn't activate the row.
+    button = Gtk.Button(child=cell, tooltip_text=kind, hexpand=True)
+    button.add_css_class("flat")
+    button.add_css_class("media-button")
+    button.connect("clicked", lambda *_: controller.open_media(gallery, index, post_url))
+    return button
+
+
+class _MediaGallery(Gtk.Box):
+    """Horizontal, swipeable gallery for posts with several photos/videos.
+
+    Swipe or drag to move; ←/→ buttons appear on hover. The scroll wheel is left to the timeline
+    (allow_scroll_wheel=False) so scrolling past a post never flips its slides."""
+
+    HEIGHT = 280
+
+    def __init__(self, items: list[dict], controller, post_url: str | None):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._count = len(items)
+        self._carousel = Adw.Carousel(allow_scroll_wheel=False, allow_long_swipes=False, spacing=8, hexpand=True)
+        self._carousel.set_overflow(Gtk.Overflow.HIDDEN)
+        self._carousel.add_css_class("media-gallery")
+        for index, media in enumerate(items):
+            self._carousel.append(_media_cell(media, index, items, controller, post_url, self.HEIGHT, compact=False, slide=True))
+        self._carousel.connect("page-changed", lambda _c, i: self._sync(i))
+
+        self._counter = _label("", "media-counter")
+        self._counter.set_halign(Gtk.Align.END)
+        self._counter.set_valign(Gtk.Align.START)
+        self._counter.set_margin_top(8)
+        self._counter.set_margin_end(8)
+        self._prev = self._arrow("go-previous-symbolic", "Previous", Gtk.Align.START, -1)
+        self._next = self._arrow("go-next-symbolic", "Next", Gtk.Align.END, 1)
+
+        stage = Gtk.Overlay(child=self._carousel)
+        for widget in (self._counter, self._prev, self._next):
+            stage.add_overlay(widget)
+        hover = Gtk.EventControllerMotion()
+        hover.connect("enter", lambda *_: self._set_hover(True))
+        hover.connect("leave", lambda *_: self._set_hover(False))
+        stage.add_controller(hover)
+        # Adw.Carousel's swipe tracker consumes scroll events even when they are vertical, which
+        # would freeze the timeline under the pointer. Hand vertical scrolling to the timeline.
+        wheel = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.BOTH_AXES)
+        wheel.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        wheel.connect("scroll", self._on_scroll)
+        stage.add_controller(wheel)
+        self.append(stage)
+        self.append(Adw.CarouselIndicatorDots(carousel=self._carousel))
+        self._hovered = False
+        self._sync(0)
+
+    def _arrow(self, icon: str, tooltip: str, side: Gtk.Align, delta: int) -> Gtk.Button:
+        button = Gtk.Button(icon_name=icon, tooltip_text=tooltip, halign=side, valign=Gtk.Align.CENTER, margin_start=8, margin_end=8)
+        for css in ("osd", "circular", "media-nav", "gallery-nav"):
+            button.add_css_class(css)
+        button.connect("clicked", lambda *_: self._step(delta))
+        return button
+
+    def _on_scroll(self, controller: Gtk.EventControllerScroll, dx: float, dy: float) -> bool:
+        if abs(dx) >= abs(dy):
+            return False  # horizontal (touchpad swipe): let the carousel page
+        scroller = self.get_ancestor(Gtk.ScrolledWindow)
+        if scroller is None:
+            return False
+        adjustment = scroller.get_vadjustment()
+        if controller.get_unit() == Gdk.ScrollUnit.WHEEL:
+            step = adjustment.get_page_size() ** (2 / 3)  # GtkScrolledWindow's own wheel step
+        else:
+            step = 1.0  # touchpad: deltas are already in pixels
+        adjustment.set_value(adjustment.get_value() + dy * step)
+        return True
+
+    def _step(self, delta: int) -> None:
+        target = round(self._carousel.get_position()) + delta
+        if 0 <= target < self._count:
+            self._carousel.scroll_to(self._carousel.get_nth_page(target), True)
+
+    def _set_hover(self, hovered: bool) -> None:
+        self._hovered = hovered
+        self._sync(round(self._carousel.get_position()))
+
+    def _sync(self, index: int) -> None:
+        self._counter.set_label(f"{index + 1} / {self._count}")
+        self._prev.set_visible(self._hovered and index > 0)
+        self._next.set_visible(self._hovered and index < self._count - 1)
+
+
 def _media(items: list[dict], controller=None, post_url: str | None = None, compact: bool = False) -> Gtk.Widget | None:
     items = [m for m in items or [] if fmt.media_thumb(m)][:4]
     if not items:
         return None
-    gallery = items  # the viewer always gets every item, even when the grid shows one
-    if compact:
-        items = items[:1]
-    grid = Gtk.Grid(column_spacing=4, row_spacing=4, column_homogeneous=True)
-    grid.add_css_class("media-grid")
-    height = 120 if compact else (260 if len(items) == 1 else 150)
-    for index, media in enumerate(items[:4]):
-        picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True, hexpand=True)
-        picture.set_size_request(-1, height)
-        picture.set_overflow(Gtk.Overflow.HIDDEN)
-        picture.add_css_class("media")
-        images.load(fmt.media_thumb(media), lambda tex, p=picture: tex and p.set_paintable(tex))
-        cell: Gtk.Widget = picture
-        if media.get("type") in ("VIDEO", "GIF"):
-            overlay = Gtk.Overlay(child=picture)
-            badge = _label("GIF" if media["type"] == "GIF" else "▶ Video", "media-badge")
-            badge.set_halign(Gtk.Align.START)
-            badge.set_valign(Gtk.Align.END)
-            badge.set_margin_start(8)
-            badge.set_margin_bottom(8)
-            overlay.add_overlay(badge)
-            if not compact:
-                play = Gtk.Image.new_from_icon_name("media-playback-start-symbolic")
-                play.set_pixel_size(28)
-                play.set_halign(Gtk.Align.CENTER)
-                play.set_valign(Gtk.Align.CENTER)
-                play.add_css_class("media-play")
-                overlay.add_overlay(play)
-            cell = overlay
-        if controller is not None:
-            # A button (not a click gesture) so it is keyboard reachable and doesn't activate the row.
-            kind = {"VIDEO": "Play video", "GIF": "Play GIF"}.get(media.get("type"), "View image")
-            button = Gtk.Button(child=cell, tooltip_text=kind, hexpand=True)
-            button.add_css_class("flat")
-            button.add_css_class("media-button")
-            button.connect("clicked", lambda *_, i=index: controller.open_media(gallery, i, post_url))
-            cell = button
-        span = 2 if len(items) == 1 or (len(items) == 3 and index == 0) else 1
-        if len(items) == 3:
-            col, row = (0, 0) if index == 0 else (index - 1, 1)
-        else:
-            col, row = index % 2, index // 2
-        grid.attach(cell, col, row, span, 1)
-    return grid
+    if len(items) > 1 and not compact:
+        return _MediaGallery(items, controller, post_url)
+    # A single item, or the compact (quoted post) preview showing the first of several;
+    # the viewer still gets every item.
+    return _media_cell(items[0], 0, items, controller, post_url, 120 if compact else 260, compact)
 
 
 class _CountButton(Gtk.Button):

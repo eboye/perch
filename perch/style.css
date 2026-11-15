@@ -170,6 +170,24 @@
   background: rgba(72, 72, 78, 0.9);
 }
 
+.media-gallery {
+  border-radius: 12px;
+}
+
+.media-counter {
+  background: alpha(black, 0.6);
+  color: white;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.8em;
+  font-weight: bold;
+}
+
+.gallery-nav {
+  min-width: 34px;
+  min-height: 34px;
+}
+
 .video-controls {
   background: alpha(black, 0.6);
   color: white;
