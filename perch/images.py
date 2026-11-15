@@ -25,13 +25,18 @@ def _fetch(url: str) -> bytes | None:
         return None
 
 
+def _decode(url: str, data: bytes | None) -> Gdk.Texture | None:
+    if not data:
+        return None
+    try:
+        return Gdk.Texture.new_from_bytes(GLib.Bytes.new(data))
+    except GLib.Error as err:
+        print(f"[perch] image decode failed for {url}: {err.message}")
+        return None
+
+
 def _finish(url: str, data: bytes | None) -> bool:
-    texture = None
-    if data:
-        try:
-            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(data))
-        except GLib.Error as err:
-            print(f"[perch] image decode failed for {url}: {err.message}")
+    texture = _decode(url, data)
     if texture is not None:
         _cache[url] = texture
         while len(_cache) > _MAX_CACHE:
@@ -41,9 +46,19 @@ def _finish(url: str, data: bytes | None) -> bool:
     return GLib.SOURCE_REMOVE
 
 
-def load(url: str | None, callback: Callable[[Gdk.Texture | None], None]) -> None:
-    """Call ``callback(texture)`` on the main loop once ``url`` is loaded (None on failure)."""
+def load(url: str | None, callback: Callable[[Gdk.Texture | None], None], cache: bool = True) -> None:
+    """Call ``callback(texture)`` on the main loop once ``url`` is loaded (None on failure).
+
+    ``cache=False`` is for large one-off images (the media viewer) that shouldn't sit in memory.
+    """
     if not url:
+        return
+    if not cache:
+        def work():  # fetch + decode off the main thread; textures are immutable and thread-safe to create
+            texture = _decode(url, _fetch(url))
+            GLib.idle_add(lambda: callback(texture) or GLib.SOURCE_REMOVE)
+
+        _pool.submit(work)
         return
     if (texture := _cache.get(url)) is not None:
         _cache.move_to_end(url)

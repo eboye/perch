@@ -47,10 +47,11 @@ def _body(tweet: dict) -> Gtk.Label | None:
     return body
 
 
-def _media(items: list[dict], compact: bool = False) -> Gtk.Widget | None:
-    items = [m for m in items or [] if fmt.media_thumb(m)]
+def _media(items: list[dict], controller=None, post_url: str | None = None, compact: bool = False) -> Gtk.Widget | None:
+    items = [m for m in items or [] if fmt.media_thumb(m)][:4]
     if not items:
         return None
+    gallery = items  # the viewer always gets every item, even when the grid shows one
     if compact:
         items = items[:1]
     grid = Gtk.Grid(column_spacing=4, row_spacing=4, column_homogeneous=True)
@@ -71,7 +72,22 @@ def _media(items: list[dict], compact: bool = False) -> Gtk.Widget | None:
             badge.set_margin_start(8)
             badge.set_margin_bottom(8)
             overlay.add_overlay(badge)
+            if not compact:
+                play = Gtk.Image.new_from_icon_name("media-playback-start-symbolic")
+                play.set_pixel_size(28)
+                play.set_halign(Gtk.Align.CENTER)
+                play.set_valign(Gtk.Align.CENTER)
+                play.add_css_class("media-play")
+                overlay.add_overlay(play)
             cell = overlay
+        if controller is not None:
+            # A button (not a click gesture) so it is keyboard reachable and doesn't activate the row.
+            kind = {"VIDEO": "Play video", "GIF": "Play GIF"}.get(media.get("type"), "View image")
+            button = Gtk.Button(child=cell, tooltip_text=kind, hexpand=True)
+            button.add_css_class("flat")
+            button.add_css_class("media-button")
+            button.connect("clicked", lambda *_, i=index: controller.open_media(gallery, i, post_url))
+            cell = button
         span = 2 if len(items) == 1 or (len(items) == 3 and index == 0) else 1
         if len(items) == 3:
             col, row = (0, 0) if index == 0 else (index - 1, 1)
@@ -207,7 +223,7 @@ def _space_card(space_id: str, controller) -> Gtk.Widget:
     return card
 
 
-def quoted_card(tweet: dict) -> Gtk.Box:
+def quoted_card(tweet: dict, controller=None) -> Gtk.Box:
     card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     card.add_css_class("quoted")
     user = tweet.get("tweetBy") or {}
@@ -220,7 +236,7 @@ def quoted_card(tweet: dict) -> Gtk.Box:
     card.append(top)
     if body := _body(tweet):
         card.append(body)
-    if media := _media(tweet.get("media"), compact=True):
+    if media := _media(tweet.get("media"), controller, tweet.get("url"), compact=True):
         card.append(media)
     return card
 
@@ -254,12 +270,12 @@ class TweetRow(Gtk.ListBoxRow):
         content.append(_header(user, shown.get("createdAt")))
         if body := _body(shown):
             content.append(body)
-        if media := _media(shown.get("media")):
+        if media := _media(shown.get("media"), controller, shown.get("url")):
             content.append(media)
         for space_id in fmt.space_ids(shown):
             content.append(_space_card(space_id, controller))
         if shown.get("quoted"):
-            content.append(quoted_card(shown["quoted"]))
+            content.append(quoted_card(shown["quoted"], controller))
         content.append(ActionBar(shown, controller))
         row.append(content)
         outer.append(row)

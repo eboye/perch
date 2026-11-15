@@ -137,6 +137,42 @@
   opacity: 0.7;
 }
 
+.media-button {
+  padding: 0;
+  border-radius: 12px;
+}
+
+.media-play {
+  color: white;
+  background: alpha(black, 0.55);
+  border-radius: 999px;
+  padding: 12px;
+}
+
+.media-viewer {
+  background: #000;
+  color: white;
+}
+
+.media-viewer .osd-header {
+  background: alpha(black, 0.6);
+  color: white;
+}
+
+.video-controls {
+  background: alpha(black, 0.6);
+  color: white;
+  border-radius: 12px;
+  padding: 4px 8px;
+}
+
+.media-error {
+  background: alpha(black, 0.7);
+  color: white;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
 .media-badge {
   background: alpha(black, 0.7);
   color: white;

@@ -6,6 +6,7 @@ from gi.repository import Adw, Gio, GLib, Gtk
 
 from perch import APP_ID, APP_NAME, keyring, settings
 from perch.compose import ComposeDialog
+from perch.media_viewer import MediaViewer
 from perch.messages import ConversationPage, InboxView
 from perch.notifications import NotificationsView
 from perch.paged_list import PagedListView
@@ -207,6 +208,14 @@ class PerchWindow(Adw.ApplicationWindow):
             return
         self._nav.pop_to_tag("home")
         self._nav.push(ConversationPage(self, conversation, users))
+
+    def open_media(self, items: list[dict], index: int, post_url: str | None) -> None:
+        if not items:
+            return
+        if self._nav.find_page("media"):
+            self._nav.pop_to_tag("media")
+            self._nav.pop()
+        self._nav.push(MediaViewer(items, index, post_url))
 
     def show_tab(self, name: str) -> None:
         if not self._signed_in() or name not in self._views:

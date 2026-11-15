@@ -116,6 +116,30 @@ const methods = {
 const TWEET_ACTIONS = new Set(['like', 'unlike', 'retweet', 'unretweet', 'bookmark', 'unbookmark']);
 
 // Tweet.toJSON() drops the viewer's own state; pull it from the raw GraphQL payload.
+// rettiwt picks the highest-bitrate MP4 (often ~4K). For in-app playback use the best variant whose
+// longer side is <= 1280px (falls back to the smallest one); keep the original as `hdUrl`.
+const MAX_VIDEO_SIDE = 1280;
+
+function variantSide(url) {
+	const match = /\/(\d+)x(\d+)\//.exec(url || '');
+	return match ? Math.max(Number(match[1]), Number(match[2])) : Infinity;
+}
+
+function pickVideoVariants(out, legacy) {
+	const rawMedia = legacy.extended_entities?.media || [];
+	for (const media of out.media || []) {
+		if (media.type !== 'VIDEO' && media.type !== 'GIF') continue;
+		const raw = rawMedia.find((m) => m.id_str === media.id);
+		const mp4s = (raw?.video_info?.variants || [])
+			.filter((v) => v.content_type === 'video/mp4' && v.url)
+			.sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0));
+		if (!mp4s.length) continue;
+		const fitting = mp4s.filter((v) => variantSide(v.url) <= MAX_VIDEO_SIDE);
+		media.hdUrl = media.url;
+		media.url = (fitting.length ? fitting[fitting.length - 1] : mp4s[0]).url;
+	}
+}
+
 function serializeTweet(tweet) {
 	if (!tweet) return null;
 	const out = plain(tweet);
@@ -123,6 +147,7 @@ function serializeTweet(tweet) {
 	out.liked = Boolean(legacy.favorited);
 	out.retweeted = Boolean(legacy.retweeted);
 	out.bookmarked = Boolean(legacy.bookmarked);
+	pickVideoVariants(out, legacy);
 	if (tweet.quoted) out.quoted = serializeTweet(tweet.quoted);
 	if (tweet.retweetedTweet) out.retweetedTweet = serializeTweet(tweet.retweetedTweet);
 	return out;
