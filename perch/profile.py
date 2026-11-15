@@ -36,7 +36,7 @@ class _ProfilePostsView(PagedListView):
         return TweetRow(item, self._controller)
 
     def on_row_activated(self, row: TweetRow) -> None:
-        self._controller.open_tweet(row.tweet)
+        row.activate_post()
 
 
 class ProfilePage(Adw.NavigationPage):

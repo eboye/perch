@@ -114,6 +114,27 @@ const methods = {
 		return { ok: true };
 	},
 
+	// Post search. The query goes to X as typed (rettiwt joins includeWords verbatim), so X's own
+	// operators work: from:user, #tag, "exact phrase", -word, lang:xx, min_faves:N …
+	// { query, mode: 'top'|'latest'|'media', cursor? } -> { list, next }
+	'search.posts': async ({ query, mode, cursor }) => {
+		const q = String(query || '').trim();
+		if (!q) return { list: [], next: '' };
+		if (demoMode) return demo.searchPosts(q, mode, cursor);
+		const raw = mode === 'media' ? `${q} filter:media` : q;
+		const data = await requireClient().tweet.search({ includeWords: [raw], top: mode !== 'latest' }, 20, cursor || undefined);
+		return { list: data.list.map(serializeTweet), next: data.next };
+	},
+
+	// People search. { query, cursor? } -> { list: users, next }
+	'search.users': async ({ query, cursor }) => {
+		const q = String(query || '').trim().replace(/^@/, '');
+		if (!q) return { list: [], next: '' };
+		if (demoMode) return demo.searchUsers(q, cursor);
+		const data = await requireClient().user.search(q, 20, cursor || undefined);
+		return { list: data.list.map(serializeUser), next: data.next };
+	},
+
 	// like | unlike | retweet | unretweet | bookmark | unbookmark
 	'tweet.action': async ({ action, id }) => {
 		if (!TWEET_ACTIONS.has(action)) throw new Error(`Unsupported action: ${action}`);

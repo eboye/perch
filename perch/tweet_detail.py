@@ -27,7 +27,7 @@ class _RepliesView(PagedListView):
         return TweetRow(item, self._controller)
 
     def on_row_activated(self, row: TweetRow) -> None:
-        self._controller.open_tweet(row.tweet)
+        row.activate_post()
 
 
 class TweetDetailPage(Adw.NavigationPage):
@@ -38,7 +38,7 @@ class TweetDetailPage(Adw.NavigationPage):
         self.tweet_id = tweet["id"]
 
         self._ancestors = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["tweet-list", "thread-ancestors"])
-        self._ancestors.connect("row-activated", lambda _l, row: controller.open_tweet(row.tweet))
+        self._ancestors.connect("row-activated", lambda _l, row: row.activate_post() if hasattr(row, "activate_post") else None)
         self._ancestors_spinner = Adw.Spinner(halign=Gtk.Align.CENTER, width_request=20, height_request=20, visible=False, margin_top=8)
 
         self._focused = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["tweet-list"])

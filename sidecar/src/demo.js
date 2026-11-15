@@ -211,7 +211,24 @@ function userPosts(id, kind, cursor) {
 	return { list, next: page < 1 ? String(page + 1) : '' };
 }
 
+function searchPosts(query, mode, cursor) {
+	const page = cursor ? Number(cursor) : 0;
+	const list = Array.from({ length: 8 }, (_, i) => {
+		const t = tweet(page * 8 + i + (mode === 'latest' ? 20 : mode === 'media' ? 60 : 0), 'foryou', true);
+		return { ...t, fullText: `${t.fullText} — matching “${query}”` };
+	});
+	return { list, next: page < 1 ? String(page + 1) : '' };
+}
+
+function searchUsers(query) {
+	const q = query.toLowerCase();
+	const matches = users.filter((u) => u.userName.includes(q) || u.fullName.toLowerCase().includes(q));
+	return { list: (matches.length ? matches : users).map((u) => profile(u.id)), next: '' };
+}
+
 module.exports = {
+	searchPosts,
+	searchUsers,
 	profile,
 	userPosts,
 	details,

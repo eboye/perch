@@ -15,6 +15,7 @@ from perch.sidecar import RpcError, Sidecar
 from perch.spaces import PlayerBar, SpaceDialog, SpacePlayer, ask_space_url
 from perch import format as fmt
 from perch.profile import ProfilePage
+from perch.search import SearchPage
 from perch.timeline import TimelineView
 from perch.tweet_detail import TweetDetailPage
 
@@ -120,6 +121,8 @@ class PerchWindow(Adw.ApplicationWindow):
         header.pack_start(refresh)
         new_post = Gtk.Button(icon_name="document-edit-symbolic", tooltip_text="New Post (Ctrl+N)", action_name="win.compose")
         header.pack_start(new_post)
+        search = Gtk.Button(icon_name="system-search-symbolic", tooltip_text="Search (Ctrl+F)", action_name="win.search")
+        header.pack_start(search)
 
         self._menu = Gio.Menu()
         self._menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic", tooltip_text="Main Menu", primary=True)
@@ -186,6 +189,7 @@ class PerchWindow(Adw.ApplicationWindow):
             ("compose", lambda: self.compose()),
             ("open-space", lambda: self._signed_in() and ask_space_url(self, self)),
             ("my-profile", lambda: self._me and self.open_profile(self._me)),
+            ("search", lambda: self.open_search()),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
@@ -203,6 +207,7 @@ class PerchWindow(Adw.ApplicationWindow):
         app = self.get_application()
         app.set_accels_for_action("win.refresh", ["<Control>r", "F5"])
         app.set_accels_for_action("win.compose", ["<Control>n"])
+        app.set_accels_for_action("win.search", ["<Control>f"])
 
     def _on_desktop_notifications_toggled(self, action: Gio.SimpleAction, value: GLib.Variant) -> None:
         action.set_state(value)
@@ -259,16 +264,32 @@ class PerchWindow(Adw.ApplicationWindow):
         self._nav.push(ProfilePage(self, handle, preview=user))
 
     def open_link(self, uri: str) -> bool:
-        """Route X links inside Perch (profiles, posts); return False to let GTK open the browser."""
+        """Route X links inside Perch (profiles, posts, hashtags / searches); return False to let
+        GTK open the browser."""
         target = fmt.x_link_target(uri)
         if target is None:
             return False
         kind, value = target
         if kind == "profile":
             self.open_profile(value)
+        elif kind == "search":
+            self.open_search(value, mode="latest" if value.startswith("#") else None)
         else:
             self.open_tweet_by_id(value, fallback_url=uri)
         return True
+
+    def open_search(self, query: str = "", mode: str | None = None) -> None:
+        """Open the search page (reusing it if it's already in the navigation stack)."""
+        if not self._signed_in():
+            return
+        page = self._nav.find_page("search")
+        if page is not None:
+            self._nav.pop_to_tag("search")
+        else:
+            page = SearchPage(self)
+            self._nav.push(page)
+        if query:
+            page.search(query, mode)
 
     def open_tweet_by_id(self, tweet_id: str, fallback_url: str | None = None) -> None:
         """Fetch a post by id, then open its page (used where only an id is known, e.g. notifications).
@@ -425,7 +446,7 @@ class PerchWindow(Adw.ApplicationWindow):
         if not self._signed_in():
             return
         page = self._nav.get_visible_page()
-        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage)):
+        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage)):
             page.reload()
             return
         view = self._views[self._current_tab()]

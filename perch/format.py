@@ -3,7 +3,7 @@
 import html
 import re
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from gi.repository import GLib
 
@@ -98,13 +98,19 @@ _RESERVED = {
 
 
 def x_link_target(uri: str) -> tuple[str, str] | None:
-    """Where an X link points, if Perch can show it: ("profile", handle) or ("post", id)."""
+    """Where an X link points, if Perch can show it: ("profile", handle), ("post", id) or
+    ("search", query) for hashtag and search links."""
     match = _X_HOST.match(uri or "")
     if not match:
         return None
     path = match.group(1) or "/"
     if post := _POST_PATH.match(path):
         return "post", post.group(1)
+    if hashtag := re.match(r"^/hashtag/([^/]+)/?$", path):
+        return "search", "#" + unquote(hashtag.group(1))
+    if path.rstrip("/") == "/search":
+        query = parse_qs(urlparse(uri).query).get("q", [""])[0].strip()
+        return ("search", query) if query else None
     if (profile := _PROFILE_PATH.match(path)) and profile.group(1).lower() not in _RESERVED:
         return "profile", profile.group(1)
     return None

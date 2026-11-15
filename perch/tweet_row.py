@@ -413,9 +413,31 @@ def _clickable_quote(card: Gtk.Widget, quoted: dict, controller) -> Gtk.Widget:
     return card
 
 
+def _link_under_pointer(widget: Gtk.Widget) -> str | None:
+    """The link (in any post-text label inside ``widget``) currently under the mouse pointer."""
+    if isinstance(widget, Gtk.Label) and widget.has_css_class("tweet-text"):
+        return widget.get_current_uri()
+    child = widget.get_first_child()
+    while child is not None:
+        if uri := _link_under_pointer(child):
+            return uri
+        child = child.get_next_sibling()
+    return None
+
+
 class TweetRow(Gtk.ListBoxRow):
     """One post. ``detailed=True`` is the focused post on its own page: larger text, full date
     and counts, and not clickable (it's already open)."""
+
+    def activate_post(self) -> None:
+        """What clicking the row does. The list box takes the click before the post text's own
+        link handling sees it, so a click on a link (@mention, #tag, URL) would otherwise open the
+        post: follow the link under the pointer instead, if there is one."""
+        if uri := _link_under_pointer(self):
+            if not self._controller.open_link(uri):
+                Gtk.UriLauncher(uri=uri).launch(self.get_root(), None, None, None)
+            return
+        self._controller.open_tweet(self.tweet)
 
     def __init__(self, tweet: dict, controller, detailed: bool = False):
         super().__init__(activatable=not detailed)
@@ -426,6 +448,7 @@ class TweetRow(Gtk.ListBoxRow):
         self.tweet = shown  # what this row displays (the original, for a repost)
         self.url = shown.get("url")
         self.tweet_id = tweet.get("id")
+        self._controller = controller
         user = shown.get("tweetBy") or {}
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
