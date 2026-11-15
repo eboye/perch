@@ -16,7 +16,7 @@ GTK4 + libadwaita UI (Python)  ⇄  JSON lines over stdio  ⇄  Node sidecar (re
 - DMs: inbox + conversation via rettiwt; sending via the web client's `dm/new2.json` (rettiwt has no
   send). Encrypted XChat messages show as a placeholder (decrypting needs the chat PIN + X's
   chat-xdk, not bundled). Only the newest page (~150 messages) of a conversation loads, and reading
-  in Perch does not mark conversations read on X.
+  in Perch marks the conversation read on X (sends a read receipt if you have them enabled).
 - Spaces: details come from rettiwt; the HLS audio URL comes from `live_video_stream/status` (signed
   with rettiwt's credential helpers + a browser user agent — X returns 404 otherwise) and plays through
   GStreamer `playbin3` (`perch/spaces.py`). Open one from a tweet's Space card or menu → Open Space….
@@ -48,6 +48,7 @@ npm --prefix sidecar ci && npm --prefix sidecar run build
 PERCH_DEMO=1 python3 -m perch            # offline fixtures, no account needed
 PERCH_API_KEY=... python3 -m perch       # skip the keyring
 PERCH_AUDIO_SINK="fakesink sync=true"    # play Spaces silently while testing
+PERCH_DEBUG_RPC=1                        # log sidecar calls (method + ids only) to stderr
 ```
 
 Flathub note: the sidecar module uses network during the build (`npm ci`). Publishing to Flathub would

@@ -192,6 +192,11 @@ async function handle(line) {
 	}
 	const { id, method, params } = request;
 	const fn = methods[method];
+	if (process.env.PERCH_DEBUG_RPC === '1') {
+		// Development trace: method plus identifier-like params only (never text, keys or paths).
+		const ids = Object.fromEntries(Object.entries(params || {}).filter(([k]) => /(^id$|Id$|^kind$|^action$)/.test(k)));
+		console.error(`[rpc] ${method} ${JSON.stringify(ids)}`);
+	}
 	try {
 		if (!fn) throw new Error(`Unknown method: ${method}`);
 		writeFrame(JSON.stringify({ id, result: await fn(params || {}) }) + '\n');

@@ -14,9 +14,15 @@ from perch.window import PerchWindow  # noqa: E402
 
 
 class PerchApplication(Adw.Application):
+    """Closing the window only hides it (Perch keeps polling, notifying and playing Spaces);
+    the app ends only through the "quit" action — the dock's right-click Quit (GNOME Shell
+    activates app.quit when an app exports it), Ctrl+Q, or Quit in the main menu."""
+
     def __init__(self):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
         self.sidecar = Sidecar()
+        self.quitting = False
+        self._main_window: PerchWindow | None = None
         self.connect("shutdown", lambda *_: self.sidecar.stop())
 
     def do_startup(self):
@@ -27,8 +33,11 @@ class PerchApplication(Adw.Application):
         Gtk.StyleContext.add_provider_for_display(display, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         Gtk.IconTheme.get_for_display(display).add_search_path(str(Path(__file__).with_name("icons")))
 
+        # Stay alive while the window is hidden; released again in _quit().
+        self.hold()
+
         for name, handler, accels in (
-            ("quit", lambda *_: self.quit(), ["<Control>q"]),
+            ("quit", lambda *_: self._quit(), ["<Control>q"]),
             ("about", lambda *_: self._about(), []),
         ):
             action = Gio.SimpleAction.new(name, None)
@@ -36,16 +45,34 @@ class PerchApplication(Adw.Application):
             self.add_action(action)
             self.set_accels_for_action(f"app.{name}", accels)
 
+        # Ctrl+W hides the window (GtkWindow's built-in close action, which goes through close-request).
+        self.set_accels_for_action("window.close", ["<Control>w"])
+
         # Target of desktop notifications: brings the window up on the given tab.
         show_tab = Gio.SimpleAction.new("show-tab", GLib.VariantType.new("s"))
         show_tab.connect("activate", lambda _a, tab: self._window().show_tab(tab.get_string()))
         self.add_action(show_tab)
 
     def _window(self) -> PerchWindow:
-        return self.get_active_window() or PerchWindow(self, self.sidecar)
+        # Keep our own reference: a hidden window is not reliably the "active" one.
+        if self._main_window is None:
+            self._main_window = PerchWindow(self, self.sidecar)
+        return self._main_window
 
     def do_activate(self):
+        # Also what a dock click on the running app ends up calling: re-show the hidden window.
         self._window().present()
+
+    def _quit(self) -> None:
+        if self.quitting:
+            return
+        self.quitting = True
+        if self._main_window is not None:
+            self._main_window.prepare_quit()
+            self._main_window.destroy()
+            self._main_window = None
+        self.release()
+        self.quit()
 
     def _about(self):
         Adw.AboutDialog(

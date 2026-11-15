@@ -7,6 +7,8 @@ const { Cookie } = require('cookiejar');
 
 // X answers 404 to non-browser user agents on several of these endpoints.
 const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0';
+// The web client sends a per-session client UUID with DM requests (mautrix-twitter does the same).
+const CLIENT_UUID = require('node:crypto').randomUUID();
 
 function authHeaders(client) {
 	const cookies = AuthService.decodeCookie(client.apiKey)
@@ -19,6 +21,7 @@ function authHeaders(client) {
 		'x-twitter-client-language': 'en',
 		referer: 'https://x.com/',
 		'user-agent': BROWSER_UA,
+		'x-client-uuid': CLIENT_UUID,
 	};
 }
 

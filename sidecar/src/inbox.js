@@ -95,10 +95,18 @@ function methods({ requireClient, demoMode }) {
 			const state = raw.inbox_initial_state || raw.inbox_timeline || {};
 			for (const user of Object.values(state.users || {})) rememberLegacyUser(user);
 
+			const rawConversations = state.conversations || {};
+
 			const conversations = inbox.conversations.map((c) => {
 				const messages = c.messages.map(serializeMessage).sort(byTime);
 				const last = messages[messages.length - 1] || null;
+				const rawConversation = rawConversations[c.id] || {};
+				// Unread = newer than this conversation's own read marker, which X updates wherever you
+				// read it (web, phone, Perch). The inbox-level "last seen" only drives the envelope badge.
+				const lastRead = rawConversation.last_read_event_id || null;
 				const lastSeen = c.trusted ? inbox.trustedLastSeenEventId || inbox.lastSeenEventId : inbox.untrustedLastSeenEventId;
+				const marker = lastRead || lastSeen;
+				const newestEventId = rawConversation.max_entry_id || last?.id || null;
 				return {
 					id: c.id,
 					type: c.type,
@@ -109,12 +117,61 @@ function methods({ requireClient, demoMode }) {
 					muted: c.muted,
 					lastActivityAt: c.lastActivityAt,
 					lastMessage: last,
-					unread: Boolean(last && last.senderId !== meId && lastSeen && isNewer(last.id, lastSeen)),
+					lastReadEventId: lastRead,
+					newestEventId,
+					unread: Boolean(last && last.senderId !== meId && marker && isNewer(newestEventId, marker)),
 				};
 			});
 			conversations.sort((a, b) => new Date(b.lastActivityAt) - new Date(a.lastActivityAt));
 			const users = await lookupUsers(client, conversations.flatMap((c) => c.participants));
-			return { conversations, cursor: inbox.cursor || '', users };
+			const newestEventId = conversations
+				.filter((c) => c.trusted && c.newestEventId)
+				.reduce((max, c) => (!max || isNewer(c.newestEventId, max) ? c.newestEventId : max), null);
+			return {
+				conversations,
+				cursor: inbox.cursor || '',
+				users,
+				newestEventId,
+				lastSeenEventId: inbox.trustedLastSeenEventId || inbox.lastSeenEventId || null,
+			};
+		},
+
+		// Marks a conversation read up to `eventId` on X (as x.com does when you open it). If the
+		// account has read receipts on, the other participant(s) see it as read.
+		// { conversationId, eventId } -> { ok }
+		'dm.markRead': async ({ conversationId, eventId }) => {
+			if (!conversationId || !eventId) throw new Error('Missing conversation or event id');
+			if (demoMode) return { ok: true };
+			const client = requireClient();
+			const url = `https://x.com/i/api/1.1/dm/conversation/${encodeURIComponent(conversationId)}/mark_read.json`;
+			const res = await signedFetch(client, url, {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({ conversationId: String(conversationId), last_read_event_id: String(eventId) }).toString(),
+			});
+			if (!res.ok) {
+				const text = (await res.text().catch(() => '')).slice(0, 200);
+				throw Object.assign(new Error(`X did not accept the read marker (HTTP ${res.status}) ${text}`.trim()), { status: res.status });
+			}
+			return { ok: true };
+		},
+
+		// Clears the DM badge on X: everything up to `eventId` has been seen in the inbox.
+		// { eventId } -> { ok }
+		'dm.markSeen': async ({ eventId }) => {
+			if (!eventId) throw new Error('Missing event id');
+			if (demoMode) return { ok: true };
+			const client = requireClient();
+			const res = await signedFetch(client, 'https://x.com/i/api/1.1/dm/update_last_seen_event_id.json', {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({ last_seen_event_id: String(eventId), trusted_last_seen_event_id: String(eventId) }).toString(),
+			});
+			if (!res.ok) {
+				const text = (await res.text().catch(() => '')).slice(0, 200);
+				throw Object.assign(new Error(`X did not accept the seen marker (HTTP ${res.status}) ${text}`.trim()), { status: res.status });
+			}
+			return { ok: true };
 		},
 
 		// { id } -> { messages (oldest first), hasMore, cursor, users }

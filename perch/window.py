@@ -50,6 +50,8 @@ class PerchWindow(Adw.ApplicationWindow):
         self._pages.add_named(self._build_signin(), "signin")
         self._pages.add_named(self._build_main(), "main")
         self._install_actions()
+        self.connect("close-request", self._on_close_request)
+        self.connect("notify::visible", lambda *_: self._maybe_mark_inbox_seen())
         self._start()
 
     # -- pages --------------------------------------------------------------
@@ -149,6 +151,26 @@ class PerchWindow(Adw.ApplicationWindow):
             actions.append("Sign Out", "win.sign-out")
         actions.append(f"About {APP_NAME}", "app.about")
         self._menu.append_section(None, actions)
+        # Closing the window only hides Perch; this (like the dock's Quit and Ctrl+Q) really exits.
+        quit_section = Gio.Menu()
+        quit_section.append(f"Quit {APP_NAME}", "app.quit")
+        self._menu.append_section(None, quit_section)
+
+    # -- close to dock -------------------------------------------------------
+
+    def _on_close_request(self, _window) -> bool:
+        if getattr(self.get_application(), "quitting", True):
+            return False  # a real quit: let the window close
+        # Hide instead of closing. Videos in the viewer stop; Space audio keeps playing on purpose.
+        page = self._nav.get_visible_page()
+        if isinstance(page, MediaViewer):
+            self._nav.pop()
+        self.set_visible(False)
+        return True
+
+    def prepare_quit(self) -> None:
+        self._poller.stop()
+        self.player.stop()
 
     # -- actions ------------------------------------------------------------
 
@@ -256,7 +278,41 @@ class PerchWindow(Adw.ApplicationWindow):
                 inbox.loaded_once = False
         if not inbox.loaded_once:
             inbox.unread_count = sum(bool(c.get("unread")) for c in result.get("conversations") or [])
+        if result.get("newestEventId"):
+            inbox.newest_event_id = result["newestEventId"]
+            inbox.last_seen_event_id = result.get("lastSeenEventId")
         self.update_badges()
+        self._maybe_mark_inbox_seen()
+
+    def mark_conversation_read(self, conversation_id: str, event_id: str) -> None:
+        """Persist "read" on X (the conversation then shows as read on the web and phone too)."""
+
+        def done(_result, error):
+            if error:
+                # Local state already shows it read; it will come back unread on the next refresh.
+                print(f"[perch] marking {conversation_id} read on X failed: {error}")
+
+        self._sidecar.call("dm.markRead", {"conversationId": conversation_id, "eventId": event_id}, done)
+
+    def on_inbox_loaded(self) -> None:
+        self._maybe_mark_inbox_seen()
+
+    def _maybe_mark_inbox_seen(self) -> None:
+        """While the Messages tab is actually on screen, clear X's DM badge up to the newest event."""
+        inbox = self._views["messages"]
+        newest, seen = inbox.newest_event_id, inbox.last_seen_event_id
+        if not (self.get_visible() and self._signed_in() and self._current_tab() == "messages" and newest):
+            return
+        if seen and str(seen).isdigit() and str(newest).isdigit() and int(seen) >= int(newest):
+            return
+
+        def done(_result, error):
+            if error:
+                print(f"[perch] clearing the DM badge on X failed: {error}")
+            else:
+                inbox.last_seen_event_id = newest
+
+        self._sidecar.call("dm.markSeen", {"eventId": newest}, done)
 
     def on_dm_sent(self, conversation_id: str, message: dict) -> None:
         self._views["messages"].on_message_sent(conversation_id, message)
@@ -290,6 +346,7 @@ class PerchWindow(Adw.ApplicationWindow):
     def _on_tab_changed(self) -> None:
         self._ensure_loaded()
         self._maybe_mark_seen()
+        self._maybe_mark_inbox_seen()
 
     def _maybe_mark_seen(self) -> None:
         view = self._views["notifications"]

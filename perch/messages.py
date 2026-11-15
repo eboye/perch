@@ -96,6 +96,9 @@ class InboxView(PagedListView):
     def __init__(self, controller):
         super().__init__(controller)
         self.unread_count = 0
+        # Inbox-level "seen" state on X (drives X's envelope badge; see window._maybe_mark_inbox_seen).
+        self.newest_event_id: str | None = None
+        self.last_seen_event_id: str | None = None
 
     def fetch_page(self, cursor, callback) -> None:
         def adapt(result, error):
@@ -109,7 +112,11 @@ class InboxView(PagedListView):
         return ConversationRow(item, page.get("users") or {}, self._controller.me_id)
 
     def on_page_loaded(self, page: dict, first: bool) -> None:
+        if first:
+            self.newest_event_id = page.get("newestEventId")
+            self.last_seen_event_id = page.get("lastSeenEventId")
         self._recount()
+        self._controller.on_inbox_loaded()
 
     def on_row_activated(self, row: ConversationRow) -> None:
         if row.conversation.get("unread"):
@@ -176,6 +183,9 @@ class ConversationPage(Adw.NavigationPage):
         self._last_sender: str | None = None
         self._message_ids: set[str] = set()
         self._is_group = len(conversation.get("participants") or []) > 2
+        # Newest event this page has told X about (dm.markRead); starts from the inbox's view.
+        self._inbox_newest = conversation.get("newestEventId")
+        self._marked_read: str | None = None
 
         header = Adw.HeaderBar(title_widget=Adw.WindowTitle(title=title, subtitle=subtitle))
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh")
@@ -233,6 +243,20 @@ class ConversationPage(Adw.NavigationPage):
         if added:
             self._scroll_to_bottom()
         self._entry.grab_focus()
+        self._mark_read(result.get("messages") or [])
+
+    def _mark_read(self, messages: list[dict]) -> None:
+        """Tell X the conversation is read up to its newest event, so it stays read everywhere.
+        Only snowflake ids qualify (XChat-only events carry other ids), and only forward moves."""
+        candidates = [m.get("id") for m in messages] + [self._inbox_newest]
+        numeric = [int(c) for c in candidates if c and str(c).isdigit()]
+        if not numeric:
+            return
+        newest = str(max(numeric))
+        if self._marked_read is not None and int(self._marked_read) >= int(newest):
+            return
+        self._marked_read = newest
+        self._controller.mark_conversation_read(self.conversation_id, newest)
 
     def _append(self, message: dict) -> "_Bubble":
         self._message_ids.add(message["id"])
