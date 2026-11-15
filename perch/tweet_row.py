@@ -4,6 +4,7 @@ from gi.repository import Adw, Gdk, Gtk, Pango
 
 from perch import format as fmt
 from perch import images
+from perch.focal_picture import FocalPicture
 
 
 def _label(text: str = "", *classes: str, **props) -> Gtk.Label:
@@ -107,7 +108,8 @@ def _media_cell(
 ) -> Gtk.Widget:
     """One thumbnail (with video/GIF badges) that opens the viewer at ``index``: a Gtk.Button, or a
     swipe-friendly _Slide when it lives in a gallery carousel."""
-    picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True, hexpand=True)
+    # Crops around X's point of interest (faces, subject) rather than the middle.
+    picture = FocalPicture(media, hexpand=True)
     picture.set_size_request(-1, height)
     picture.set_overflow(Gtk.Overflow.HIDDEN)
     picture.add_css_class("media")

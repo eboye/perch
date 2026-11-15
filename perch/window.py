@@ -133,6 +133,10 @@ class PerchWindow(Adw.ApplicationWindow):
         bottom = Adw.ViewSwitcherBar(stack=self._stack)
         view = Adw.ToolbarView(content=self._stack)
         view.add_top_bar(header)
+        self._update_banner = Adw.Banner(
+            title="A new version of Perch is installed", button_label="Restart", action_name="app.restart-update", revealed=False
+        )
+        view.add_top_bar(self._update_banner)
         view.add_bottom_bar(PlayerBar(self.player))
         view.add_bottom_bar(bottom)
 
@@ -178,6 +182,13 @@ class PerchWindow(Adw.ApplicationWindow):
             self._nav.pop()
         self.set_visible(False)
         return True
+
+    def show_update_banner(self) -> None:
+        """A newer Perch is installed: a banner on the main view, plus a toast that shows on
+        whatever page is open right now."""
+        self._update_banner.set_revealed(True)
+        toast = Adw.Toast(title="A new version of Perch is installed", button_label="Restart", action_name="app.restart-update", timeout=0)
+        self._toasts.add_toast(toast)
 
     def prepare_quit(self) -> None:
         self._poller.stop()

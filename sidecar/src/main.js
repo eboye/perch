@@ -320,9 +320,23 @@ function variantSide(url) {
 	return match ? Math.max(Number(match[1]), Number(match[2])) : Infinity;
 }
 
+// X's face boxes for a photo, normalised to 0..1 of the image, plus its aspect ratio. The UI keeps
+// (real-sized) faces in view when cropping thumbnails. X's per-aspect "focus_rects" are not passed
+// on: they are derived from these same face boxes, false hits included.
+function addFocusHints(media, raw) {
+	const info = raw?.original_info;
+	if (!info?.width || !info?.height) return;
+	const W = info.width;
+	const H = info.height;
+	media.aspect = W / H;
+	const orig = raw.features?.orig?.faces || [];
+	if (orig.length) media.faces = orig.map((f) => ({ x: f.x / W, y: f.y / H, w: f.w / W, h: f.h / H }));
+}
+
 function pickVideoVariants(out, legacy) {
 	const rawMedia = legacy.extended_entities?.media || [];
 	for (const media of out.media || []) {
+		if (media.type === 'PHOTO') addFocusHints(media, rawMedia.find((m) => m.id_str === media.id));
 		if (media.type !== 'VIDEO' && media.type !== 'GIF') continue;
 		const raw = rawMedia.find((m) => m.id_str === media.id);
 		const mp4s = (raw?.video_info?.variants || [])
