@@ -14,6 +14,7 @@ from perch.poller import Poller
 from perch.sidecar import RpcError, Sidecar
 from perch.spaces import PlayerBar, SpaceDialog, SpacePlayer, ask_space_url
 from perch.timeline import TimelineView
+from perch.tweet_detail import TweetDetailPage
 
 _KEY_HELP = (
     "Perch reads X using your browser session. Paste a rettiwt <b>API key</b> — "
@@ -231,6 +232,15 @@ class PerchWindow(Adw.ApplicationWindow):
         self._nav.pop_to_tag("home")
         self._nav.push(ConversationPage(self, conversation, users))
 
+    def open_tweet(self, tweet: dict) -> None:
+        """Open a post on its own page (reply chain, the post, its replies)."""
+        if not self._signed_in() or not tweet.get("id"):
+            return
+        tag = f"post-{tweet['id']}"
+        if self._nav.get_visible_page().get_tag() == tag:
+            return
+        self._nav.push(TweetDetailPage(self, tweet))
+
     def open_media(self, items: list[dict], index: int, post_url: str | None) -> None:
         if not items:
             return
@@ -317,7 +327,11 @@ class PerchWindow(Adw.ApplicationWindow):
     def on_dm_sent(self, conversation_id: str, message: dict) -> None:
         self._views["messages"].on_message_sent(conversation_id, message)
 
-    def on_posted(self, tweet_id: str | None) -> None:
+    def on_posted(self, tweet_id: str | None, reply_to_id: str | None = None) -> None:
+        # A reply posted from a post page shows up in that page's replies.
+        page = self._nav.get_visible_page()
+        if reply_to_id and isinstance(page, TweetDetailPage) and page.tweet_id == reply_to_id:
+            page.on_reply_posted()
         toast = Adw.Toast(title="Posted", timeout=5)
         if tweet_id and self._me:
             url = f"https://x.com/{self._me.get('userName', 'i')}/status/{tweet_id}"
@@ -360,7 +374,7 @@ class PerchWindow(Adw.ApplicationWindow):
         if not self._signed_in():
             return
         page = self._nav.get_visible_page()
-        if isinstance(page, ConversationPage):
+        if isinstance(page, (ConversationPage, TweetDetailPage)):
             page.reload()
             return
         view = self._views[self._current_tab()]

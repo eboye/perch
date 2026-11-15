@@ -65,6 +65,12 @@ function tweet(n, kind, nested = false) {
 		t.fullText = 'Going live in a Space about GTK app design — come hang out https://t.co/demoSpace';
 		t.entities.urls = ['https://x.com/i/spaces/1DemoSpaceAbc'];
 	}
+	if (n % 10 === 8 && n > 0) {
+		// A reply to the previous post, so the post page has a parent to show.
+		const parent = tweet(n - 1, kind, true);
+		t.replyTo = parent.id;
+		t.fullText = `@${parent.tweetBy.userName} ${t.fullText}`;
+	}
 	if (nested) return t;
 	if (n % 6 === 3) t.quoted = tweet(n + 50, kind, true);
 	if (n % 5 === 4) {
@@ -145,7 +151,45 @@ function conversation(id) {
 
 const participant = (u) =>({ id: u.id, screenName: u.userName, displayName: u.fullName, avatarUrl: '', isVerified: u.isVerified });
 
+function details(id) {
+	const raw = Number(id) - 900000;
+	const kind = raw % 7 === 1 ? 'foryou' : 'following';
+	const n = Math.max(0, Math.floor((raw - (kind === 'foryou' ? 1 : 0)) / 7));
+	return { ...tweet(n, kind), id: String(id) };
+}
+
+const replyTexts = ['Totally agree!', 'Not sure about this one 🤔', 'Great point.', 'Source?', 'This is the way.', 'Bookmarked.', 'Can you share more details?', '😂😂'];
+
+function replies(id, cursor) {
+	const page = cursor ? Number(cursor) : 0;
+	const list = replyTexts.map((text, i) => {
+		const by = users[(i + page) % users.length];
+		const rid = `${id}${page}${i}`;
+		return {
+			id: rid,
+			conversationId: String(id),
+			createdAt: stamp(10 + i * 7 + page * 60),
+			entities: { hashtags: [], mentionedUsers: [], urls: [] },
+			fullText: text,
+			lang: 'en',
+			likeCount: (i * 17) % 90,
+			replyCount: i % 3,
+			retweetCount: i % 2,
+			viewCount: 100 + i * 37,
+			replyTo: String(id),
+			tweetBy: by,
+			url: `https://x.com/${by.userName}/status/${rid}`,
+			liked: false,
+			retweeted: false,
+			bookmarked: false,
+		};
+	});
+	return { list, next: page < 1 ? String(page + 1) : '' };
+}
+
 module.exports = {
+	details,
+	replies,
 	notifications,
 	inbox,
 	conversation,

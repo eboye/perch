@@ -172,6 +172,6 @@ class ComposeDialog(Adw.Dialog):
                 self._error.set_revealed(True)
                 return
             self.close()
-            self._controller.on_posted(result.get("id"))
+            self._controller.on_posted(result.get("id"), (self._reply_to or {}).get("id"))
 
         self._controller.sidecar.call("tweet.post", params, done)

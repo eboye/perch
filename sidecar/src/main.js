@@ -66,6 +66,25 @@ const methods = {
 		return { list: data.list.map(serializeTweet), next: data.next };
 	},
 
+	// { id } -> Tweet
+	'tweet.details': async ({ id }) => {
+		if (demoMode) return demo.details(id);
+		const tweet = await requireClient().tweet.details(String(id));
+		if (!tweet) throw Object.assign(new Error('This post is unavailable'), { kind: 'not_found' });
+		return serializeTweet(tweet);
+	},
+
+	// Replies under a post. The conversation timeline also contains the post itself and its
+	// ancestors; those are dropped so the list is only replies.
+	// { id, cursor?, sort?: 'relevance' | 'latest' | 'likes' } -> { list, next }
+	'tweet.replies': async ({ id, cursor, sort }) => {
+		if (demoMode) return demo.replies(id, cursor);
+		const sortBy = { latest: 'LATEST', likes: 'LIKES' }[sort] || 'RELEVANCE';
+		const data = await requireClient().tweet.replies(String(id), cursor || undefined, sortBy);
+		const list = data.list.filter((t) => t.id !== String(id) && t.replyTo).map(serializeTweet);
+		return { list, next: data.next };
+	},
+
 	// like | unlike | retweet | unretweet | bookmark | unbookmark
 	'tweet.action': async ({ action, id }) => {
 		if (!TWEET_ACTIONS.has(action)) throw new Error(`Unsupported action: ${action}`);

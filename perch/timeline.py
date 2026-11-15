@@ -16,3 +16,6 @@ class TimelineView(PagedListView):
 
     def make_row(self, item: dict, page: dict) -> TweetRow:
         return TweetRow(item, self._controller)
+
+    def on_row_activated(self, row: TweetRow) -> None:
+        self._controller.open_tweet(row.tweet)

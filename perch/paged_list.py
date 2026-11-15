@@ -18,7 +18,11 @@ class PagedListView(Gtk.Stack):
     empty_title = "Nothing here yet"
     empty_icon = "mail-inbox-symbolic"
     end_label = "You're all caught up"
+    empty_label = "Nothing here yet"  # footer text when `always_show_list` and there are no rows
     list_css = "tweet-list"
+    # Keep the list (and its header) on screen while loading, empty or failing, instead of switching
+    # to the full-page spinner / empty / error pages. Used by the post page (header = the post).
+    always_show_list = False
 
     def __init__(self, controller):
         super().__init__(transition_type=Gtk.StackTransitionType.CROSSFADE)
@@ -26,6 +30,7 @@ class PagedListView(Gtk.Stack):
         self._cursor: str | None = None
         self._seen: set[str] = set()
         self._loading = False
+        self._retry_first = False
         self._generation = 0  # bumps on reload so stale responses are dropped
         self.loaded_once = False
 
@@ -51,17 +56,23 @@ class PagedListView(Gtk.Stack):
         more.add_css_class("pill")
         more.connect("clicked", lambda *_: self.load_more())
         self._footer.add_named(more, "more")
-        self._footer.add_named(Gtk.Label(label=self.end_label, css_classes=["dim-label"]), "end")
+        self._end_label = Gtk.Label(label=self.end_label, css_classes=["dim-label"])
+        self._footer.add_named(self._end_label, "end")
 
-        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        column.append(self._list)
-        column.append(self._footer)
+        self._column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._column.append(self._list)
+        self._column.append(self._footer)
+        column = self._column
         clamp = Adw.Clamp(maximum_size=640, tightening_threshold=480, child=column)
 
         self._scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, child=clamp, vexpand=True)
         self._scroller.connect("edge-reached", self._on_edge_reached)
         self.add_named(self._scroller, "list")
         self.set_visible_child_name("loading")
+
+    def set_header(self, widget: Gtk.Widget) -> None:
+        """A fixed widget above the rows, scrolling with them."""
+        self._column.prepend(widget)
 
     # -- subclass hooks -----------------------------------------------------
 
@@ -89,13 +100,20 @@ class PagedListView(Gtk.Stack):
         self._cursor = None
         self._seen.clear()
         self._loading = False
+        self._retry_first = False
         while row := self._list.get_row_at_index(0):
             self._list.remove(row)
-        self.set_visible_child_name("loading")
+        self.set_visible_child_name("list" if self.always_show_list else "loading")
         self._fetch()
 
     def load_more(self) -> None:
-        if self._cursor and not self._loading:
+        if self._loading:
+            return
+        if self._retry_first:
+            self._retry_first = False
+            self._cursor = None
+            self._fetch()
+        elif self._cursor:
             self._fetch()
 
     def _fetch(self) -> None:
@@ -111,10 +129,12 @@ class PagedListView(Gtk.Stack):
             return
         self._loading = False
         if error:
-            if self._list.get_row_at_index(0) is None:
+            if self._list.get_row_at_index(0) is None and not self.always_show_list:
                 self._error_page.set_description(GLib.markup_escape_text(str(error)))
                 self.set_visible_child_name("error")
             else:
+                # Keep what's on screen; "Load More" doubles as retry (of the first page if needed).
+                self._retry_first = first
                 self._footer.set_visible_child_name("more")
             self.emit("load-failed", error)
             return
@@ -132,8 +152,10 @@ class PagedListView(Gtk.Stack):
         # A page with nothing new means the cursor is exhausted (X sometimes keeps returning one).
         self._cursor = next_cursor if added else None
         self._footer.set_visible_child_name("more" if self._cursor else "end")
+        has_rows = self._list.get_row_at_index(0) is not None
+        self._end_label.set_label(self.end_label if has_rows else self.empty_label)
         self.on_page_loaded(result, first)  # before the stack flips, so visibility listeners see final state
-        self.set_visible_child_name("list" if self._list.get_row_at_index(0) else "empty")
+        self.set_visible_child_name("list" if has_rows or self.always_show_list else "empty")
 
     # -- misc ---------------------------------------------------------------
 

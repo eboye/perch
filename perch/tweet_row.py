@@ -359,11 +359,53 @@ def quoted_card(tweet: dict, controller=None) -> Gtk.Box:
     return card
 
 
+def _detail_stats(tweet: dict) -> Gtk.Widget:
+    """Full date and the complete counts, as on a post's own page."""
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=4)
+    box.append(_label(fmt.full_time(tweet.get("createdAt")), "dim-label"))
+    parts = []
+    for key, singular, plural in (
+        ("retweetCount", "Repost", "Reposts"),
+        ("quoteCount", "Quote", "Quotes"),
+        ("likeCount", "Like", "Likes"),
+        ("bookmarkCount", "Bookmark", "Bookmarks"),
+        ("viewCount", "View", "Views"),
+    ):
+        count = tweet.get(key) or 0
+        if count:
+            parts.append(f"<b>{count:,}</b> {singular if count == 1 else plural}")
+    if parts:
+        stats = _label("", "detail-stats", wrap=True, use_markup=True)
+        stats.set_markup("   ".join(parts))
+        box.append(stats)
+    return box
+
+
+def _clickable_quote(card: Gtk.Widget, quoted: dict, controller) -> Gtk.Widget:
+    """Clicking a quoted post opens it (media inside it keeps its own buttons)."""
+    if controller is None or not hasattr(controller, "open_tweet"):
+        return card
+    click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+    # Claim on press so the surrounding row doesn't also activate (and open the outer post).
+    click.connect("pressed", lambda gesture, *_: gesture.set_state(Gtk.EventSequenceState.CLAIMED))
+    click.connect("released", lambda *_: controller.open_tweet(quoted))
+    card.add_controller(click)
+    card.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
+    card.set_tooltip_text("Open quoted post")
+    return card
+
+
 class TweetRow(Gtk.ListBoxRow):
-    def __init__(self, tweet: dict, controller):
-        super().__init__(activatable=True)
+    """One post. ``detailed=True`` is the focused post on its own page: larger text, full date
+    and counts, and not clickable (it's already open)."""
+
+    def __init__(self, tweet: dict, controller, detailed: bool = False):
+        super().__init__(activatable=not detailed)
         self.add_css_class("tweet")
+        if detailed:
+            self.add_css_class("tweet-detail")
         shown = tweet.get("retweetedTweet") or tweet
+        self.tweet = shown  # what this row displays (the original, for a repost)
         self.url = shown.get("url")
         self.tweet_id = tweet.get("id")
         user = shown.get("tweetBy") or {}
@@ -393,7 +435,9 @@ class TweetRow(Gtk.ListBoxRow):
         for space_id in fmt.space_ids(shown):
             content.append(_space_card(space_id, controller))
         if shown.get("quoted"):
-            content.append(quoted_card(shown["quoted"], controller))
+            content.append(_clickable_quote(quoted_card(shown["quoted"], controller), shown["quoted"], controller))
+        if detailed:
+            content.append(_detail_stats(shown))
         content.append(ActionBar(shown, controller))
         row.append(content)
         outer.append(row)

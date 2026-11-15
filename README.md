@@ -1,6 +1,6 @@
 # Perch
 
-A small GTK 4 / libadwaita client for X — timelines, like / repost / quote / bookmark, posting
+A small GTK 4 / libadwaita client for X — timelines, post pages with reply threads, like / repost / quote / bookmark, posting
 and replying with images, swipeable galleries for multi-media posts, an in-app viewer for photos (with zoom), videos and GIFs, notifications, direct messages, desktop notifications (polled every
 2 minutes while the app is open), and listening to Spaces (live and replays) — built on
 [rettiwt-api](https://github.com/Rishikant181/Rettiwt-API) (the same unofficial library
