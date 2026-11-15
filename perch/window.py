@@ -16,6 +16,7 @@ from perch.spaces import PlayerBar, SpaceDialog, SpacePlayer, ask_space_url
 from perch import format as fmt
 from perch.profile import ProfilePage
 from perch.search import SearchPage
+from perch.lists import AddToListDialog, BookmarksPage, ListPage, ListsPage
 from perch.timeline import TimelineView
 from perch.tweet_detail import TweetDetailPage
 
@@ -151,6 +152,8 @@ class PerchWindow(Adw.ApplicationWindow):
             account = Gio.Menu()
             account.append(f"Signed in as @{self._me.get('userName', '?')}", "win.noop")
             account.append("My Profile", "win.my-profile")
+            account.append("Bookmarks", "win.bookmarks")
+            account.append("Lists", "win.lists")
             self._menu.append_section(None, account)
         actions = Gio.Menu()
         actions.append("Open Space…", "win.open-space")
@@ -190,6 +193,8 @@ class PerchWindow(Adw.ApplicationWindow):
             ("open-space", lambda: self._signed_in() and ask_space_url(self, self)),
             ("my-profile", lambda: self._me and self.open_profile(self._me)),
             ("search", lambda: self.open_search()),
+            ("bookmarks", lambda: self.open_bookmarks()),
+            ("lists", lambda: self.open_lists()),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
@@ -277,6 +282,34 @@ class PerchWindow(Adw.ApplicationWindow):
         else:
             self.open_tweet_by_id(value, fallback_url=uri)
         return True
+
+    def _push_unique(self, tag: str, factory) -> None:
+        """Show the page with ``tag`` if it's in the stack, else push a new one."""
+        if not self._signed_in():
+            return
+        if self._nav.find_page(tag) is not None:
+            self._nav.pop_to_tag(tag)
+        else:
+            self._nav.push(factory())
+
+    def open_bookmarks(self) -> None:
+        self._push_unique("bookmarks", lambda: BookmarksPage(self))
+
+    def open_lists(self) -> None:
+        self._push_unique("lists", lambda: ListsPage(self))
+
+    def open_list(self, lst: dict) -> None:
+        self._push_unique(f"list-{lst['id']}", lambda: ListPage(self, lst))
+
+    def add_to_list(self, user: dict) -> None:
+        if self._signed_in() and user.get("id"):
+            AddToListDialog(self, user).present(self)
+
+    def on_lists_changed(self) -> None:
+        """A list was created, edited, deleted or had members changed: refresh the Lists page."""
+        page = self._nav.find_page("lists")
+        if page is not None:
+            page.reload()
 
     def open_search(self, query: str = "", mode: str | None = None) -> None:
         """Open the search page (reusing it if it's already in the navigation stack)."""
@@ -446,7 +479,7 @@ class PerchWindow(Adw.ApplicationWindow):
         if not self._signed_in():
             return
         page = self._nav.get_visible_page()
-        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage)):
+        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage)):
             page.reload()
             return
         view = self._views[self._current_tab()]

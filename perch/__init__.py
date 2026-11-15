@@ -1,3 +1,3 @@
 APP_ID = "io.github.eboye.Perch"
 APP_NAME = "Perch"
-VERSION = "0.2.7"
+VERSION = "0.2.8"

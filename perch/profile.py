@@ -122,7 +122,11 @@ class ProfilePage(Adw.NavigationPage):
         images.load(banner_url, lambda tex: tex and banner.set_paintable(tex), cache=False)
         top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         top.append(banner)
-        action_row = Gtk.Box(halign=Gtk.Align.END, margin_end=16, margin_top=10, height_request=44)
+        action_row = Gtk.Box(halign=Gtk.Align.END, spacing=8, margin_end=16, margin_top=10, height_request=44)
+        lists = Gtk.Button(icon_name="view-list-bullet-symbolic", tooltip_text="Add to List…", valign=Gtk.Align.CENTER)
+        lists.add_css_class("circular")
+        lists.connect("clicked", lambda *_: self._controller.add_to_list(self.user or user))
+        action_row.append(lists)
         self._follow_button = self._build_follow_button(user)
         if self._follow_button:
             action_row.append(self._follow_button)

@@ -135,6 +135,106 @@ const methods = {
 		return { list: data.list.map(serializeUser), next: data.next };
 	},
 
+	// Bookmarked posts, all or one folder. { folderId?, cursor? } -> { list, next }
+	bookmarks: async ({ folderId, cursor }) => {
+		if (demoMode) return demo.bookmarks(folderId, cursor);
+		const users = requireClient().user;
+		const data = folderId
+			? await users.bookmarkFolderTweets(String(folderId), 20, cursor || undefined)
+			: await users.bookmarks(20, cursor || undefined);
+		return { list: data.list.map(serializeTweet), next: data.next };
+	},
+
+	// Bookmark folders (an X Premium feature: most accounts have none). -> { list: [{ id, name }] }
+	'bookmarks.folders': async () => {
+		if (demoMode) return { list: [] };
+		try {
+			const data = await requireClient().user.bookmarkFolders();
+			return { list: plain(data.list) || [] };
+		} catch (err) {
+			console.error('[sidecar] bookmark folders unavailable:', err?.message || err);
+			return { list: [] };
+		}
+	},
+
+	// Your lists (owned and followed). { cursor? } -> { list, next }
+	lists: async ({ cursor }) => {
+		if (demoMode) return demo.lists();
+		const data = await requireClient().user.lists(100, cursor || undefined);
+		// X hands back a cursor even on the last page; fewer than requested means there's no more.
+		return { list: data.list.map(serializeList), next: data.list.length < 100 ? '' : data.next };
+	},
+
+	'list.details': async ({ id }) => {
+		if (demoMode) return demo.lists().list.find((l) => l.id === String(id)) || demo.lists().list[0];
+		const list = await requireClient().list.details(String(id));
+		if (!list) throw Object.assign(new Error('This list doesn’t exist'), { kind: 'not_found' });
+		return serializeList(list);
+	},
+
+	// { id, cursor? } -> { list: posts, next }
+	'list.tweets': async ({ id, cursor }) => {
+		if (demoMode) return demo.searchPosts('list', 'latest', cursor);
+		const data = await requireClient().list.tweets(String(id), 20, cursor || undefined);
+		return { list: data.list.map(serializeTweet), next: data.next };
+	},
+
+	// { id, cursor? } -> { list: users, next }
+	'list.members': async ({ id, cursor }) => {
+		if (demoMode) return demo.searchUsers('', cursor);
+		const data = await requireClient().list.members(String(id), 50, cursor || undefined);
+		return { list: data.list.map(serializeUser), next: data.next };
+	},
+
+	// { name, description?, isPrivate? } -> { id }
+	'list.create': async ({ name, description, isPrivate }) => {
+		if (!name?.trim()) throw new Error('A list needs a name');
+		if (demoMode) return { id: String(Date.now()) };
+		const id = await requireClient().list.create({ name: name.trim(), description: description || undefined, isPrivate: Boolean(isPrivate) });
+		if (!id) throw new Error('X did not create the list');
+		return { id };
+	},
+
+	// { id, name?, description?, isPrivate? } -> list
+	'list.update': async ({ id, name, description, isPrivate }) => {
+		if (demoMode) return { ...demo.lists().list[0], id: String(id), name, description, private: Boolean(isPrivate) };
+		const list = await requireClient().list.update(String(id), { name, description, isPrivate });
+		if (!list) throw new Error('X did not update the list');
+		return serializeList(list);
+	},
+
+	'list.delete': async ({ id }) => {
+		if (demoMode) return { ok: true };
+		const ok = await requireClient().list.delete(String(id));
+		if (!ok) throw new Error('X did not delete the list');
+		return { ok: true };
+	},
+
+	// Is `userId` on list `listId`? rettiwt has no membership lookup, so scan the members (up to
+	// 10 pages of 50). { listId, userId } -> { member: boolean, certain: boolean }
+	'list.hasMember': async ({ listId, userId }) => {
+		if (demoMode) return { member: listId === '5001', certain: true };
+		const lists = requireClient().list;
+		let cursor;
+		for (let page = 0; page < 10; page++) {
+			const data = await lists.members(String(listId), 50, cursor);
+			if (data.list.some((u) => u.id === String(userId))) return { member: true, certain: true };
+			if (!data.next || !data.list.length || data.next === cursor) return { member: false, certain: true };
+			cursor = data.next;
+		}
+		return { member: false, certain: false };
+	},
+
+	// { listId, userId, add: boolean } -> { memberCount }
+	'list.member': async ({ listId, userId, add }) => {
+		if (!listId || !userId) throw new Error('Missing list or user');
+		if (demoMode) return { memberCount: null };
+		const lists = requireClient().list;
+		const count = add ? await lists.addMember(String(listId), String(userId)) : await lists.removeMember(String(listId), String(userId));
+		if (count === undefined) throw new Error(`X did not ${add ? 'add' : 'remove'} the member`);
+		return { memberCount: count };
+	},
+
 	// like | unlike | retweet | unretweet | bookmark | unbookmark
 	'tweet.action': async ({ action, id }) => {
 		if (!TWEET_ACTIONS.has(action)) throw new Error(`Unsupported action: ${action}`);
@@ -193,6 +293,20 @@ function serializeUser(user) {
 	out.followsYou = Boolean(user.isFollowing);
 	out.website = legacy.entities?.url?.urls?.[0]?.expanded_url || null;
 	out.protected = Boolean(legacy.protected ?? user.raw?.privacy?.protected);
+	return out;
+}
+
+// List: add privacy, the owner's handle/name and a banner image from the raw payload.
+function serializeList(list) {
+	const out = plain(list);
+	const raw = list.raw || {};
+	const owner = raw.user_results?.result || {};
+	out.private = String(raw.mode || '').toLowerCase() === 'private';
+	out.ownerId = list.createdBy;
+	out.ownerHandle = owner.core?.screen_name || owner.legacy?.screen_name || null;
+	out.ownerName = owner.core?.name || owner.legacy?.name || null;
+	const banner = raw.custom_banner_media || raw.default_banner_media;
+	out.bannerUrl = banner?.media_info?.original_img_url || null;
 	return out;
 }
 

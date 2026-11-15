@@ -226,7 +226,41 @@ function searchUsers(query) {
 	return { list: (matches.length ? matches : users).map((u) => profile(u.id)), next: '' };
 }
 
+function bookmarks(folderId, cursor) {
+	const page = cursor ? Number(cursor) : 0;
+	const list = Array.from({ length: 6 }, (_, i) => ({ ...tweet(page * 6 + i + 120, 'foryou', true), bookmarked: true }));
+	return { list, next: page < 1 ? String(page + 1) : '' };
+}
+
+function lists() {
+	return {
+		list: [
+			['5001', 'GTK & GNOME', 'People building the GNOME desktop', 42, 310, false, users[0]],
+			['5002', 'Read later', '', 7, 0, true, users[0]],
+			['5003', 'Flatpak news', 'Packaging, portals and runtimes', 18, 1200, false, users[3]],
+		].map(([id, name, description, memberCount, subscriberCount, isPrivate, owner]) => ({
+			id,
+			name,
+			description: description || undefined,
+			memberCount,
+			subscriberCount,
+			private: isPrivate,
+			createdAt: '2025-03-01T10:00:00.000Z',
+			createdBy: owner.id,
+			ownerId: owner.id,
+			ownerHandle: owner.userName,
+			ownerName: owner.fullName,
+			isFollowing: owner.id !== users[0].id,
+			isMember: false,
+			bannerUrl: null,
+		})),
+		next: '',
+	};
+}
+
 module.exports = {
+	bookmarks,
+	lists,
 	searchPosts,
 	searchUsers,
 	profile,
