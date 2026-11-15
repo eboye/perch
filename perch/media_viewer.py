@@ -252,19 +252,21 @@ class MediaViewer(Adw.NavigationPage):
         self._title = Adw.WindowTitle(title="Media")
         header = Adw.HeaderBar(title_widget=self._title)
         header.add_css_class("osd-header")
-        self._prev = Gtk.Button(icon_name="go-previous-symbolic", tooltip_text="Previous (Left)")
-        self._next = Gtk.Button(icon_name="go-next-symbolic", tooltip_text="Next (Right)")
-        self._prev.connect("clicked", lambda *_: self._step(-1))
-        self._next.connect("clicked", lambda *_: self._step(1))
-        if len(items) > 1:
-            header.pack_start(self._prev)
-            header.pack_start(self._next)
         if post_url:
             open_post = Gtk.Button(icon_name="web-browser-symbolic", tooltip_text="Open Post in Browser")
             open_post.connect("clicked", lambda *_: Gtk.UriLauncher(uri=post_url).launch(self.get_root(), None, None, None))
             header.pack_end(open_post)
 
-        view = Adw.ToolbarView(content=self._carousel, extend_content_to_top_edge=False)
+        # Previous/next float over the image edges (as in GNOME's image viewer) so the header keeps
+        # a single back arrow — the page's own — instead of a second, identical-looking one.
+        stage = Gtk.Overlay(child=self._carousel)
+        self._prev = self._edge_button("go-previous-symbolic", "Previous (Left)", Gtk.Align.START, -1)
+        self._next = self._edge_button("go-next-symbolic", "Next (Right)", Gtk.Align.END, 1)
+        if len(items) > 1:
+            stage.add_overlay(self._prev)
+            stage.add_overlay(self._next)
+
+        view = Adw.ToolbarView(content=stage, extend_content_to_top_edge=False)
         view.add_top_bar(header)
         if len(items) > 1:
             view.add_bottom_bar(Adw.CarouselIndicatorDots(carousel=self._carousel, margin_bottom=6))
@@ -281,6 +283,14 @@ class MediaViewer(Adw.NavigationPage):
         self._initial_index = index
         self._on_page_changed(index)
         self._carousel.add_tick_callback(self._scroll_to_initial)
+
+    def _edge_button(self, icon: str, tooltip: str, side: Gtk.Align, delta: int) -> Gtk.Button:
+        button = Gtk.Button(icon_name=icon, tooltip_text=tooltip, halign=side, valign=Gtk.Align.CENTER, margin_start=12, margin_end=12)
+        button.add_css_class("osd")
+        button.add_css_class("circular")
+        button.add_css_class("media-nav")
+        button.connect("clicked", lambda *_: self._step(delta))
+        return button
 
     def _scroll_to_initial(self, carousel: Adw.Carousel, _clock) -> bool:
         if carousel.get_width() <= 0 or carousel.get_n_pages() <= self._initial_index:
@@ -304,8 +314,8 @@ class MediaViewer(Adw.NavigationPage):
         kind = {"VIDEO": "Video", "GIF": "GIF"}.get(self._items[index].get("type"), "Photo")
         self._title.set_title(kind)
         self._title.set_subtitle(f"{index + 1} of {len(self._pages)}" if len(self._pages) > 1 else "")
-        self._prev.set_sensitive(index > 0)
-        self._next.set_sensitive(index < len(self._pages) - 1)
+        self._prev.set_visible(index > 0)
+        self._next.set_visible(index < len(self._pages) - 1)
         return GLib.SOURCE_REMOVE
 
     def _on_key(self, _controller, keyval, _keycode, _state) -> bool:
