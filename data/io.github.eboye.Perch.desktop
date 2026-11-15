@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Perch
-Comment=Read your X timeline
+Comment=A GTK client for X
 Exec=perch
 Icon=io.github.eboye.Perch
 Terminal=false

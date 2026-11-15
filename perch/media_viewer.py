@@ -276,8 +276,18 @@ class MediaViewer(Adw.NavigationPage):
         self.connect("hidden", lambda *_: self._release())
         self.connect("shown", lambda *_: self._carousel.grab_focus())
 
-        # Scroll to the clicked item once the carousel has a size.
-        GLib.idle_add(lambda: self._carousel.scroll_to(self._pages[index], False) or self._on_page_changed(index))
+        # Adw.Carousel ignores scroll_to() until it has been allocated, and the page is built before it
+        # is pushed, so jump to the clicked item on the first frame where the carousel has a width.
+        self._initial_index = index
+        self._on_page_changed(index)
+        self._carousel.add_tick_callback(self._scroll_to_initial)
+
+    def _scroll_to_initial(self, carousel: Adw.Carousel, _clock) -> bool:
+        if carousel.get_width() <= 0 or carousel.get_n_pages() <= self._initial_index:
+            return GLib.SOURCE_CONTINUE
+        carousel.scroll_to(self._pages[self._initial_index], False)
+        self._on_page_changed(self._initial_index)
+        return GLib.SOURCE_REMOVE
 
     def _step(self, delta: int) -> None:
         position = round(self._carousel.get_position()) + delta

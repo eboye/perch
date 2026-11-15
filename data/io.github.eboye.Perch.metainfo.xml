@@ -4,13 +4,25 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>Perch</name>
-  <summary>Read your X timeline</summary>
+  <summary>A GTK client for X</summary>
   <description>
-    <p>A small, read-only GTK 4 / libadwaita client for X. It shows your Following and For You timelines using rettiwt-api with your own browser session.</p>
+    <p>Perch is a native GTK 4 / libadwaita client for X. It talks to X through rettiwt-api using your own session, so you can read and post without a browser tab.</p>
+    <ul>
+      <li>Following and For You timelines, with likes, reposts, quotes, bookmarks, replies and posting with images</li>
+      <li>In-app viewer for photos, videos and GIFs</li>
+      <li>Notifications and direct messages, with desktop notifications</li>
+      <li>Listen to live Spaces and replays</li>
+    </ul>
   </description>
+  <developer id="io.github.eboye">
+    <name>eboye</name>
+  </developer>
+  <url type="homepage">https://github.com/eboye/perch</url>
+  <url type="bugtracker">https://github.com/eboye/perch/issues</url>
   <launchable type="desktop-id">io.github.eboye.Perch.desktop</launchable>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-11-15"/>
     <release version="0.1.0" date="2026-11-15"/>
   </releases>
 </component>
