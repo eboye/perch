@@ -2,7 +2,7 @@
 
 import os
 
-from gi.repository import Adw, Gio, GLib, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from perch import APP_ID, APP_NAME, keyring, settings
 from perch.compose import ComposeDialog
@@ -38,6 +38,7 @@ class PerchWindow(Adw.ApplicationWindow):
         self._sidecar = sidecar
         self._me: dict | None = None
         self._demo = False
+        self._opening_post = False  # a post is being fetched to open its page
         self.player = SpacePlayer()
         self.player.connect("failed", lambda _p, message: self.toast(f"Playback stopped: {message}"))
         self._poller = Poller(self)
@@ -234,12 +235,36 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def open_tweet(self, tweet: dict) -> None:
         """Open a post on its own page (reply chain, the post, its replies)."""
+        # A repost has no replies of its own: open the original (e.g. "X liked your repost").
+        tweet = tweet.get("retweetedTweet") or tweet
         if not self._signed_in() or not tweet.get("id"):
             return
         tag = f"post-{tweet['id']}"
         if self._nav.get_visible_page().get_tag() == tag:
             return
         self._nav.push(TweetDetailPage(self, tweet))
+
+    def open_tweet_by_id(self, tweet_id: str, fallback_url: str | None = None) -> None:
+        """Fetch a post by id, then open its page (used where only an id is known, e.g. notifications).
+        If X won't return it (deleted, protected), say so and offer the browser instead."""
+        if not self._signed_in() or self._opening_post:
+            return
+        self._opening_post = True
+        self.set_cursor(Gdk.Cursor.new_from_name("progress", None))
+
+        def done(tweet, error):
+            self._opening_post = False
+            self.set_cursor(None)
+            if not error:
+                self.open_tweet(tweet)
+                return
+            toast = Adw.Toast(title=GLib.markup_escape_text(self.describe_error(error, "Couldn't open the post")), timeout=6)
+            if fallback_url:
+                toast.set_button_label("Open in Browser")
+                toast.connect("button-clicked", lambda *_: Gtk.UriLauncher(uri=fallback_url).launch(self, None, None, None))
+            self._toasts.add_toast(toast)
+
+        self._sidecar.call("tweet.details", {"id": tweet_id}, done)
 
     def open_media(self, items: list[dict], index: int, post_url: str | None) -> None:
         if not items:

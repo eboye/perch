@@ -1,5 +1,7 @@
 """X notifications tab."""
 
+import re
+
 from gi.repository import Adw, Gtk, Pango
 
 from perch import format as fmt
@@ -23,11 +25,33 @@ def icon_for(kind: str | None) -> str:
     return _ICONS.get(kind or "", _DEFAULT_ICON)[0]
 
 
+_STATUS_URL = re.compile(r"/status(?:es)?/(\d+)")
+
+
+def post_id_for(item: dict) -> str | None:
+    """The post a notification is about: its numeric `target`, else a /status/<id> url."""
+    for target in item.get("target") or []:
+        if str(target).isdigit():
+            return str(target)
+    match = _STATUS_URL.search(item.get("url") or "")
+    return match.group(1) if match else None
+
+
+def web_url_for(item: dict) -> str | None:
+    """A browser-openable link. X sometimes sends a relative API path (/2/notifications/view/…),
+    which isn't a web page; fall back to the notifications page for those."""
+    url = item.get("url") or ""
+    if url.startswith(("https://", "http://")):
+        return url
+    return "https://x.com/notifications" if url else None
+
+
 class NotificationRow(Gtk.ListBoxRow):
     def __init__(self, item: dict, users: dict, unread: bool):
-        super().__init__(activatable=bool(item.get("url")))
+        self.post_id = post_id_for(item)
+        self.url = web_url_for(item)
+        super().__init__(activatable=bool(self.post_id or self.url))
         self.add_css_class("tweet")
-        self.url = item.get("url")
         icon_name, css = _ICONS.get(item.get("icon") or "", _DEFAULT_ICON)
 
         row = Gtk.Box(spacing=12)
@@ -86,6 +110,13 @@ class NotificationsView(PagedListView):
     def on_page_loaded(self, page: dict, first: bool) -> None:
         if first and page.get("list"):
             self.newest_at = max(item.get("receivedAt") or "" for item in page["list"])
+
+    def on_row_activated(self, row: NotificationRow) -> None:
+        # Likes, reposts, replies, mentions → the post page; follows etc. → the browser.
+        if row.post_id:
+            self._controller.open_tweet_by_id(row.post_id, fallback_url=row.url)
+        elif row.url:
+            Gtk.UriLauncher(uri=row.url).launch(self.get_root(), None, None, None)
 
     def mark_seen(self) -> None:
         """Remember the newest loaded notification as read (drives the tab badge and unread dots)."""
