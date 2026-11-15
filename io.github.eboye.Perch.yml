@@ -1,0 +1,66 @@
+id: io.github.eboye.Perch
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node24
+command: perch
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio
+
+modules:
+  # Ship the Node runtime from the SDK extension inside the app so it is fully self-contained.
+  - name: node
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 /usr/lib/sdk/node24/bin/node /app/bin/node
+      - install -Dm644 /usr/lib/sdk/node24/LICENSE /app/share/licenses/node/LICENSE || true
+
+  # rettiwt-api bridge, bundled by esbuild into a single CommonJS file.
+  # NOTE: npm needs network at build time. Fine for local builds; Flathub would need
+  # flatpak-node-generator to turn package-lock.json into offline sources.
+  - name: perch-sidecar
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/node24/bin
+      build-args:
+        - --share=network
+      env:
+        npm_config_cache: /run/build/perch-sidecar/.npm-cache
+    sources:
+      - type: dir
+        path: sidecar
+        skip:
+          - node_modules
+          - dist
+    build-commands:
+      - npm ci --no-audit --no-fund
+      - npm run build
+      - install -Dm644 dist/sidecar.cjs /app/share/perch/sidecar/dist/sidecar.cjs
+
+  - name: perch
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: perch
+        dest: perch
+        skip:
+          - __pycache__
+      - type: dir
+        path: data
+        dest: data
+      - type: file
+        path: build-aux/perch-launcher.py
+    build-commands:
+      - mkdir -p /app/share/perch
+      - cp -r perch /app/share/perch/
+      - python3 -m compileall -q /app/share/perch/perch
+      - install -Dm755 perch-launcher.py /app/bin/perch
+      - install -Dm644 data/io.github.eboye.Perch.desktop /app/share/applications/io.github.eboye.Perch.desktop
+      - install -Dm644 data/io.github.eboye.Perch.metainfo.xml /app/share/metainfo/io.github.eboye.Perch.metainfo.xml
+      - install -Dm644 data/icons/io.github.eboye.Perch.svg /app/share/icons/hicolor/scalable/apps/io.github.eboye.Perch.svg

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Perch
+Comment=Read your X timeline
+Exec=perch
+Icon=io.github.eboye.Perch
+Terminal=false
+Type=Application
+Categories=Network;GTK;
+Keywords=x;twitter;timeline;social;
+StartupNotify=true
+DBusActivatable=false

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.eboye.Perch</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Perch</name>
+  <summary>Read your X timeline</summary>
+  <description>
+    <p>A small, read-only GTK 4 / libadwaita client for X. It shows your Following and For You timelines using rettiwt-api with your own browser session.</p>
+  </description>
+  <launchable type="desktop-id">io.github.eboye.Perch.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-15"/>
+  </releases>
+</component>

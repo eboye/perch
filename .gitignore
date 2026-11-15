@@ -1,0 +1,8 @@
+__pycache__/
+sidecar/node_modules/
+sidecar/dist/
+.flatpak-builder/
+.flatpak-build/
+.flatpak-repo/
+.playwright-mcp/
+*.flatpak
