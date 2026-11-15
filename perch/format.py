@@ -87,6 +87,42 @@ def avatar_url(url: str | None) -> str | None:
     return url.replace("_normal.", "_bigger.") if url else None
 
 
+_X_HOST = re.compile(r"^https?://(?:www\.|mobile\.)?(?:x|twitter)\.com(/[^?#]*)?", re.I)
+_PROFILE_PATH = re.compile(r"^/([A-Za-z0-9_]{1,15})/?$")
+_POST_PATH = re.compile(r"^/(?:[A-Za-z0-9_]{1,15}|i(?:/web)?)/status(?:es)?/(\d+)")
+# First path segments that are X pages, not usernames.
+_RESERVED = {
+    "home", "explore", "search", "notifications", "messages", "settings", "i", "hashtag", "compose",
+    "login", "logout", "signup", "tos", "privacy", "about", "intent", "share", "lists", "bookmarks",
+}
+
+
+def x_link_target(uri: str) -> tuple[str, str] | None:
+    """Where an X link points, if Perch can show it: ("profile", handle) or ("post", id)."""
+    match = _X_HOST.match(uri or "")
+    if not match:
+        return None
+    path = match.group(1) or "/"
+    if post := _POST_PATH.match(path):
+        return "post", post.group(1)
+    if (profile := _PROFILE_PATH.match(path)) and profile.group(1).lower() not in _RESERVED:
+        return "profile", profile.group(1)
+    return None
+
+
+def joined(raw: str | None) -> str:
+    stamp = parse_time(raw)
+    return f"Joined {stamp:%B %Y}" if stamp else ""
+
+
+def profile_banner_url(url: str | None) -> str | None:
+    return f"{url}/1500x500" if url else None
+
+
+def profile_avatar_url(url: str | None) -> str | None:
+    return url.replace("_normal.", "_400x400.") if url else None
+
+
 _SPACE_URL = re.compile(r"(?:x|twitter)\.com/i/spaces/(\w+)")
 
 

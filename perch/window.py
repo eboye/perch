@@ -13,6 +13,8 @@ from perch.paged_list import PagedListView
 from perch.poller import Poller
 from perch.sidecar import RpcError, Sidecar
 from perch.spaces import PlayerBar, SpaceDialog, SpacePlayer, ask_space_url
+from perch import format as fmt
+from perch.profile import ProfilePage
 from perch.timeline import TimelineView
 from perch.tweet_detail import TweetDetailPage
 
@@ -145,6 +147,7 @@ class PerchWindow(Adw.ApplicationWindow):
         if self._me:
             account = Gio.Menu()
             account.append(f"Signed in as @{self._me.get('userName', '?')}", "win.noop")
+            account.append("My Profile", "win.my-profile")
             self._menu.append_section(None, account)
         actions = Gio.Menu()
         actions.append("Open Space…", "win.open-space")
@@ -182,6 +185,7 @@ class PerchWindow(Adw.ApplicationWindow):
             ("sign-out", self._sign_out),
             ("compose", lambda: self.compose()),
             ("open-space", lambda: self._signed_in() and ask_space_url(self, self)),
+            ("my-profile", lambda: self._me and self.open_profile(self._me)),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
@@ -243,6 +247,28 @@ class PerchWindow(Adw.ApplicationWindow):
         if self._nav.get_visible_page().get_tag() == tag:
             return
         self._nav.push(TweetDetailPage(self, tweet))
+
+    def open_profile(self, user_or_handle) -> None:
+        """Open a profile page by handle, or from a user dict (shown as a preview while it loads)."""
+        user = user_or_handle if isinstance(user_or_handle, dict) else None
+        handle = (user.get("userName") if user else str(user_or_handle or "")).lstrip("@")
+        if not self._signed_in() or not handle:
+            return
+        if self._nav.get_visible_page().get_tag() == f"profile-{handle.lower()}":
+            return
+        self._nav.push(ProfilePage(self, handle, preview=user))
+
+    def open_link(self, uri: str) -> bool:
+        """Route X links inside Perch (profiles, posts); return False to let GTK open the browser."""
+        target = fmt.x_link_target(uri)
+        if target is None:
+            return False
+        kind, value = target
+        if kind == "profile":
+            self.open_profile(value)
+        else:
+            self.open_tweet_by_id(value, fallback_url=uri)
+        return True
 
     def open_tweet_by_id(self, tweet_id: str, fallback_url: str | None = None) -> None:
         """Fetch a post by id, then open its page (used where only an id is known, e.g. notifications).
@@ -399,7 +425,7 @@ class PerchWindow(Adw.ApplicationWindow):
         if not self._signed_in():
             return
         page = self._nav.get_visible_page()
-        if isinstance(page, (ConversationPage, TweetDetailPage)):
+        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage)):
             page.reload()
             return
         view = self._views[self._current_tab()]

@@ -187,7 +187,33 @@ function replies(id, cursor) {
 	return { list, next: page < 1 ? String(page + 1) : '' };
 }
 
+function profile(key) {
+	const user = users.find((u) => u.id === String(key) || u.userName === String(key).replace(/^@/, '')) || users[1];
+	return {
+		...user,
+		description: `${user.fullName} writes about GTK, Flatpak and the open desktop. Views my own. #GNOME`,
+		location: 'Belgrade',
+		website: 'https://gnome.org',
+		createdAt: 'Mon Jan 02 10:00:00 +0000 2017',
+		youFollow: user.id === '1002',
+		followsYou: user.id !== '1004',
+		protected: false,
+	};
+}
+
+function userPosts(id, kind, cursor) {
+	const page = cursor ? Number(cursor) : 0;
+	const by = users.find((u) => u.id === String(id)) || users[1];
+	const list = Array.from({ length: 10 }, (_, i) => {
+		const t = tweet(page * 10 + i + (kind === 'replies' ? 40 : kind === 'media' ? 80 : 0), 'following', true);
+		return { ...t, tweetBy: by, url: `https://x.com/${by.userName}/status/${t.id}` };
+	});
+	return { list, next: page < 1 ? String(page + 1) : '' };
+}
+
 module.exports = {
+	profile,
+	userPosts,
 	details,
 	replies,
 	notifications,

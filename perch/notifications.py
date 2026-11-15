@@ -7,6 +7,7 @@ from gi.repository import Adw, Gtk, Pango
 from perch import format as fmt
 from perch import images, settings
 from perch.paged_list import PagedListView
+from perch.tweet_row import link_to_profile
 
 # notification_icon -> (symbolic icon, css class)
 _ICONS = {
@@ -47,7 +48,7 @@ def web_url_for(item: dict) -> str | None:
 
 
 class NotificationRow(Gtk.ListBoxRow):
-    def __init__(self, item: dict, users: dict, unread: bool):
+    def __init__(self, item: dict, users: dict, unread: bool, controller=None):
         self.post_id = post_id_for(item)
         self.url = web_url_for(item)
         super().__init__(activatable=bool(self.post_id or self.url))
@@ -69,8 +70,8 @@ class NotificationRow(Gtk.ListBoxRow):
             avatars = Gtk.Box(spacing=4)
             for person in people:
                 avatar = Adw.Avatar(size=30, text=person.get("fullName") or "", show_initials=True)
-                avatar.set_tooltip_text(f"{person.get('fullName', '')} @{person.get('userName', '')}")
                 images.load(fmt.avatar_url(person.get("profileImage")), lambda tex, a=avatar: tex and a.set_custom_image(tex))
+                link_to_profile(avatar, person, controller)
                 avatars.append(avatar)
             content.append(avatars)
 
@@ -105,17 +106,18 @@ class NotificationsView(PagedListView):
 
     def make_row(self, item: dict, page: dict) -> NotificationRow:
         received = item.get("receivedAt") or ""
-        return NotificationRow(item, page.get("users") or {}, unread=bool(self._seen_at) and received > self._seen_at)
+        return NotificationRow(item, page.get("users") or {}, unread=bool(self._seen_at) and received > self._seen_at, controller=self._controller)
 
     def on_page_loaded(self, page: dict, first: bool) -> None:
         if first and page.get("list"):
             self.newest_at = max(item.get("receivedAt") or "" for item in page["list"])
 
     def on_row_activated(self, row: NotificationRow) -> None:
-        # Likes, reposts, replies, mentions → the post page; follows etc. → the browser.
+        # Likes, reposts, replies, mentions → the post page; follows → the profile page;
+        # anything else → the browser.
         if row.post_id:
             self._controller.open_tweet_by_id(row.post_id, fallback_url=row.url)
-        elif row.url:
+        elif row.url and not self._controller.open_link(row.url):
             Gtk.UriLauncher(uri=row.url).launch(self.get_root(), None, None, None)
 
     def mark_seen(self) -> None:

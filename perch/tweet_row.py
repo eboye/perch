@@ -17,33 +17,51 @@ def _set_avatar(avatar: Adw.Avatar, user: dict) -> None:
     images.load(fmt.avatar_url(user.get("profileImage")), lambda tex: tex and avatar.set_custom_image(tex))
 
 
-def _header(user: dict, created_at: str | None) -> Gtk.Box:
+def link_to_profile(widget: Gtk.Widget, user: dict, controller) -> None:
+    """Make an avatar / name open the user's profile. Claims the click so the post row doesn't
+    also open."""
+    if controller is None or not hasattr(controller, "open_profile") or not user.get("userName"):
+        return
+    click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+    click.connect("pressed", lambda gesture, *_: gesture.set_state(Gtk.EventSequenceState.CLAIMED))
+    click.connect("released", lambda *_: controller.open_profile(user))
+    widget.add_controller(click)
+    widget.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
+    widget.set_tooltip_text(f"View @{user['userName']}’s profile")
+
+
+def _header(user: dict, created_at: str | None, controller=None) -> Gtk.Box:
     box = Gtk.Box(spacing=4)
+    who = Gtk.Box(spacing=4)  # name + badge + handle: one click target for the profile
     name = _label(user.get("fullName") or user.get("userName") or "?", "heading", ellipsize=Pango.EllipsizeMode.END)
     name.set_hexpand(False)
-    box.append(name)
+    who.append(name)
     if user.get("isVerified"):
         badge = Gtk.Image.new_from_icon_name("perch-verified-symbolic")
         badge.add_css_class("verified")
-        badge.set_tooltip_text("Verified")
-        box.append(badge)
+        who.append(badge)
     handle = _label(f"@{user.get('userName', '')}", "dim-label", ellipsize=Pango.EllipsizeMode.END)
-    handle.set_hexpand(True)
     handle.set_xalign(0)
-    box.append(handle)
+    who.append(handle)
+    link_to_profile(who, user, controller)
+    box.append(who)
+    box.append(Gtk.Box(hexpand=True))
     when = _label(fmt.relative_time(created_at), "dim-label", "numeric")
     when.set_tooltip_text(fmt.full_time(created_at))
     box.append(when)
     return box
 
 
-def _body(tweet: dict) -> Gtk.Label | None:
+def _body(tweet: dict, controller=None) -> Gtk.Label | None:
     strip = bool(tweet.get("media") or tweet.get("quoted"))
     markup = fmt.tweet_markup(tweet.get("fullText", ""), strip_trailing_link=strip)
     if not markup:
         return None
     body = _label("", "tweet-text", wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, use_markup=True)
     body.set_markup(markup)
+    if controller is not None and hasattr(controller, "open_link"):
+        # @mentions and x.com post/profile links open inside Perch; anything else in the browser.
+        body.connect("activate-link", lambda _label, uri: controller.open_link(uri))
     return body
 
 
@@ -352,7 +370,7 @@ def quoted_card(tweet: dict, controller=None) -> Gtk.Box:
     top.append(_header(user, tweet.get("createdAt")))
     top.get_last_child().set_hexpand(True)
     card.append(top)
-    if body := _body(tweet):
+    if body := _body(tweet, controller):
         card.append(body)
     if media := _media(tweet.get("media"), controller, tweet.get("url"), compact=True):
         card.append(media)
@@ -424,11 +442,12 @@ class TweetRow(Gtk.ListBoxRow):
         avatar = Adw.Avatar(size=44, text=user.get("fullName") or user.get("userName") or "", show_initials=True)
         avatar.set_valign(Gtk.Align.START)
         _set_avatar(avatar, user)
+        link_to_profile(avatar, user, controller)
         row.append(avatar)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
-        content.append(_header(user, shown.get("createdAt")))
-        if body := _body(shown):
+        content.append(_header(user, shown.get("createdAt"), controller))
+        if body := _body(shown, controller):
             content.append(body)
         if media := _media(shown.get("media"), controller, shown.get("url")):
             content.append(media)

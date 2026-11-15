@@ -85,6 +85,35 @@ const methods = {
 		return { list, next: data.next };
 	},
 
+	// { handle } or { id } -> user (+ youFollow, followsYou, website, protected)
+	'user.profile': async ({ handle, id }) => {
+		if (demoMode) return demo.profile(handle || id);
+		const key = id || String(handle || '').replace(/^@/, '');
+		if (!key) throw new Error('Missing user');
+		const user = await requireClient().user.details(String(key));
+		if (!user) throw Object.assign(new Error('This account doesn’t exist'), { kind: 'not_found' });
+		return serializeUser(user);
+	},
+
+	// A user's posts / replies / media. { id, kind: 'posts'|'replies'|'media', cursor? } -> { list, next }
+	'user.posts': async ({ id, kind, cursor }) => {
+		if (demoMode) return demo.userPosts(id, kind, cursor);
+		const users = requireClient().user;
+		const fetcher = { replies: users.replies, media: users.media }[kind] || users.timeline;
+		const data = await fetcher.call(users, String(id), 20, cursor || undefined);
+		return { list: data.list.map(serializeTweet), next: data.next };
+	},
+
+	// { id, follow: boolean } -> { ok }
+	'user.follow': async ({ id, follow }) => {
+		if (!id) throw new Error('Missing user id');
+		if (demoMode) return { ok: true };
+		const users = requireClient().user;
+		const ok = follow ? await users.follow(String(id)) : await users.unfollow(String(id));
+		if (!ok) throw new Error(`X did not confirm the ${follow ? 'follow' : 'unfollow'}`);
+		return { ok: true };
+	},
+
 	// like | unlike | retweet | unretweet | bookmark | unbookmark
 	'tweet.action': async ({ action, id }) => {
 		if (!TWEET_ACTIONS.has(action)) throw new Error(`Unsupported action: ${action}`);
@@ -133,6 +162,18 @@ const methods = {
 };
 
 const TWEET_ACTIONS = new Set(['like', 'unlike', 'retweet', 'unretweet', 'bookmark', 'unbookmark']);
+
+// User flags in rettiwt are named from the other side (isFollowed = you follow them); expose plain
+// names, plus the website link and protected state from the raw payload.
+function serializeUser(user) {
+	const out = plain(user);
+	const legacy = user.raw?.legacy || {};
+	out.youFollow = Boolean(user.isFollowed);
+	out.followsYou = Boolean(user.isFollowing);
+	out.website = legacy.entities?.url?.urls?.[0]?.expanded_url || null;
+	out.protected = Boolean(legacy.protected ?? user.raw?.privacy?.protected);
+	return out;
+}
 
 // Tweet.toJSON() drops the viewer's own state; pull it from the raw GraphQL payload.
 // rettiwt picks the highest-bitrate MP4 (often ~4K). For in-app playback use the best variant whose

@@ -175,7 +175,7 @@ class _Bubble(Gtk.ListBoxRow):
 
 class ConversationPage(Adw.NavigationPage):
     def __init__(self, controller, conversation: dict, users: dict):
-        title, subtitle, _other = conversation_title(conversation, users, controller.me_id)
+        title, subtitle, other = conversation_title(conversation, users, controller.me_id)
         super().__init__(title=title, tag=f"dm-{conversation['id']}")
         self._controller = controller
         self.conversation_id = conversation["id"]
@@ -191,6 +191,10 @@ class ConversationPage(Adw.NavigationPage):
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh")
         refresh.connect("clicked", lambda *_: self.reload())
         header.pack_end(refresh)
+        if other and other.get("userName") and other.get("id") != controller.me_id:
+            profile = Gtk.Button(icon_name="avatar-default-symbolic", tooltip_text=f"View @{other['userName']}’s Profile")
+            profile.connect("clicked", lambda *_: controller.open_profile(other))
+            header.pack_end(profile)
 
         self._stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         self._stack.add_named(Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, width_request=32, height_request=32), "loading")

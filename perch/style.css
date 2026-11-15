@@ -194,6 +194,25 @@
   background: alpha(currentColor, 0.06);
 }
 
+.profile-banner {
+  background: alpha(currentColor, 0.08);
+}
+
+.profile-avatar {
+  border: 4px solid var(--window-bg-color);
+  border-radius: 999px;
+}
+
+.follows-you {
+  background: alpha(currentColor, 0.1);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+.profile-counts {
+  margin-bottom: 2px;
+}
+
 .media-gallery {
   border-radius: 12px;
 }
