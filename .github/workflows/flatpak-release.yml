@@ -1,40 +1,62 @@
 name: Flatpak release
 
-# Builds Perch.flatpak with flatpak-builder and attaches it (plus a SHA-256 file) to the GitHub release.
-# Run it manually (workflow_dispatch) to build without publishing; the bundle stays a workflow artifact.
+# Builds Perch.flatpak and attaches it (plus a SHA-256 file) to the GitHub release.
+# Manual runs build the bundle as a workflow artifact; give a `tag` to also attach it to that release.
+#
+# Builds on a plain runner with a user Flatpak installation (same as build-aux/build-flatpak.sh)
+# rather than the flathub-infra container: that image ships a pre-installed SDK, and when Flathub
+# publishes a newer GNOME SDK build, updating it inside the container fails with
+# "Invalid cross-device link".
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach the bundle to (leave empty to only build)
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  group: flatpak-${{ github.ref }}
+  group: flatpak-${{ github.event.release.tag_name || inputs.tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: Build Flatpak bundle
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
-      options: --privileged
     steps:
+      # Release events check out the tagged commit; manual runs build the branch they were started on.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Uploads the bundle as the artifact "Perch-x86_64.flatpak".
-      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@933e9e8ca36e85046ebca8e211f0785c6becac40 # master, 2026-11
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q flatpak flatpak-builder appstream
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Build bundle
+        env:
+          FLATPAK_BUILDER_ARGS: --disable-rofiles-fuse
+        run: |
+          build-aux/build-flatpak.sh
+          sha256sum Perch.flatpak | tee Perch.flatpak.sha256
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          manifest-path: io.github.eboye.Perch.yml
-          bundle: Perch.flatpak
-          cache-key: flatpak-builder-${{ github.sha }}
+          name: Perch-x86_64.flatpak
+          path: |
+            Perch.flatpak
+            Perch.flatpak.sha256
+          if-no-files-found: error
 
   publish:
     name: Attach bundle to the release
     needs: build
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || inputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -46,7 +68,7 @@ jobs:
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          sha256sum Perch.flatpak | tee Perch.flatpak.sha256
+          sha256sum -c Perch.flatpak.sha256
           gh release upload "$TAG" Perch.flatpak Perch.flatpak.sha256 --clobber --repo "$GITHUB_REPOSITORY"
