@@ -21,7 +21,9 @@ from perch.profile import ProfilePage
 from perch.profile_edit import ProfileEditDialog
 from perch.scheduled import ScheduledPage
 from perch.search import SearchPage
+from perch.launcher import LauncherBadge
 from perch.list_tab import ListTabView
+from perch.quotes import QuotesPage
 from perch.lists import AddToListDialog, BookmarksPage, ListPage, ListsPage
 from perch.timeline import TimelineView
 from perch.tweet_detail import TweetDetailPage
@@ -43,11 +45,20 @@ TABS = (
 
 class PerchWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application, sidecar: Sidecar):
-        super().__init__(application=app, title=APP_NAME, default_width=600, default_height=880)
+        # The size (and maximized state) it had last time.
+        width = max(360, int(settings.get("window_width") or 600))
+        height = max(400, int(settings.get("window_height") or 880))
+        super().__init__(application=app, title=APP_NAME, default_width=width, default_height=height)
         self.set_size_request(360, 400)
+        if settings.get("window_maximized"):
+            self.maximize()
+        self._size_save = 0
+        for prop in ("default-width", "default-height", "maximized"):
+            self.connect(f"notify::{prop}", lambda *_: self._queue_size_save())
         self._sidecar = sidecar
         self._stale_toast_at = -60_000_000
         self._muted_patterns: list = []  # compiled muted words (see on_muted_words)
+        self._restoring_tabs = False  # rebuilding tabs for an account (see on_account_ready)
         self._adding_from: str | None = None  # account id while "Add Account…" is showing the sign-in page
         self._signin_attempted = False  # a key was tried while adding (the sidecar must be re-signed)
         sidecar.on_stale = self._on_stale
@@ -129,6 +140,10 @@ class PerchWindow(Adw.ApplicationWindow):
             view.connect("load-failed", self._on_load_failed)
             self._stack.add_titled_with_icon(view, name, title, icon)
         self._views["notifications"].connect("notify::visible-child-name", lambda *_: self._maybe_mark_seen())
+        # The dock icon's count follows the Notifications and Messages tab badges.
+        self._badge = LauncherBadge(self.get_application())
+        for name in ("notifications", "messages"):
+            self._stack.get_page(self._views[name]).connect("notify::badge-number", lambda *_: self._sync_dock_badge())
         self._stack.connect("notify::visible-child-name", lambda *_: self._on_tab_changed())
 
         header = Adw.HeaderBar()
@@ -222,6 +237,23 @@ class PerchWindow(Adw.ApplicationWindow):
         self.minimize()
         return True
 
+    def _queue_size_save(self) -> None:
+        """Remember the window size a moment after resizing stops (not on every step of a drag)."""
+        if self._size_save:
+            GLib.source_remove(self._size_save)
+        self._size_save = GLib.timeout_add(500, self._save_size)
+
+    def _save_size(self) -> bool:
+        self._size_save = 0
+        maximized = self.is_maximized()
+        settings.set("window_maximized", maximized)
+        if not maximized:  # keep the un-maximized size to come back to
+            width, height = self.get_default_size()
+            if width > 0 and height > 0:
+                settings.set("window_width", width)
+                settings.set("window_height", height)
+        return GLib.SOURCE_REMOVE
+
     def is_on_screen(self) -> bool:
         """Shown and not minimized: only then has the user seen what's in the window. On Wayland GTK
         isn't told about minimizing; GNOME marks a minimized window *suspended* instead."""
@@ -245,6 +277,11 @@ class PerchWindow(Adw.ApplicationWindow):
     def prepare_quit(self) -> None:
         self._poller.stop()
         self.player.stop()
+        self._badge.set_count(0)  # don't leave a count on the dock icon after quitting
+
+    def _sync_dock_badge(self) -> None:
+        total = sum(self._stack.get_page(self._views[name]).get_badge_number() for name in ("notifications", "messages"))
+        self._badge.set_count(total)
 
     # -- actions ------------------------------------------------------------
 
@@ -594,8 +631,16 @@ class PerchWindow(Adw.ApplicationWindow):
             self._stack.set_visible_child_name(current)
 
     def on_account_ready(self) -> None:
-        """Signed in (or switched account): that account's pinned lists become tabs."""
-        self._rebuild_list_tabs()
+        """Signed in (or switched account): that account's pinned lists become tabs, and the tab it
+        was last on is shown again."""
+        last = settings.account_get("last_tab")
+        self._restoring_tabs = True
+        try:
+            self._rebuild_list_tabs()
+            if last in self._views:
+                self._stack.set_visible_child_name(last)
+        finally:
+            self._restoring_tabs = False
 
     def open_muted_words(self) -> None:
         self._push_unique("muted-words", lambda: MutedWordsPage(self))
@@ -703,6 +748,11 @@ class PerchWindow(Adw.ApplicationWindow):
 
         dialog.connect("response", on_response)
         dialog.present(self)
+
+    def open_quotes(self, tweet: dict) -> None:
+        """The posts quoting ``tweet``."""
+        if tweet.get("id"):
+            self._push_unique(f"quotes-{tweet['id']}", lambda: QuotesPage(self, tweet))
 
     def open_edit_history(self, tweet: dict) -> None:
         if tweet.get("id"):
@@ -901,6 +951,10 @@ class PerchWindow(Adw.ApplicationWindow):
         return self._stack.get_visible_child_name()
 
     def _on_tab_changed(self) -> None:
+        if self._restoring_tabs:
+            return  # tabs are being rebuilt for an account; the final one loads once they're done
+        if self._signed_in():
+            settings.account_set("last_tab", self._current_tab())
         self._ensure_loaded()
         self._maybe_mark_seen()
         self._maybe_mark_inbox_seen()
@@ -931,7 +985,7 @@ class PerchWindow(Adw.ApplicationWindow):
             return
         page = self._nav.get_visible_page()
         # A refresh always asks X (the sidecar otherwise reuses results for a short while).
-        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage, PeoplePage, EditHistoryPage, ScheduledPage, MutedWordsPage)):
+        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage, PeoplePage, EditHistoryPage, ScheduledPage, MutedWordsPage, QuotesPage)):
             self._sidecar.fresh(page.reload)
             return
         view = self._views[self._current_tab()]
@@ -1124,11 +1178,11 @@ class PerchWindow(Adw.ApplicationWindow):
 
                     keyring.store(user["id"], key, label, stored)
             self._rebuild_menu()
+            self.on_account_ready()  # this account's pinned tabs and last tab, before anything loads
             self._pages.set_visible_child_name("main")
             self._ensure_loaded()
             self.load_muted_words()
             self._poller.start()
-            self.on_account_ready()
 
         def on_init(_result, error: RpcError | None):
             if error:

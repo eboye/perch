@@ -1,5 +1,7 @@
 """Widget that renders one tweet (or repost) from the sidecar's plain-JSON Tweet."""
 
+import html
+
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
 from perch import format as fmt
@@ -52,6 +54,8 @@ def _post_menu(tweet: dict, controller, on_deleted, on_translate=None) -> Gtk.Me
     if url:
         item("Copy Link", lambda: (Gdk.Display.get_default().get_clipboard().set(url), controller.toast("Link copied")))
         item("Open in Browser", lambda: Gtk.UriLauncher(uri=url).launch(menu.get_root(), None, None, None))
+    if text := html.unescape(tweet.get("fullText") or "").strip():
+        item("Copy Text", lambda: (Gdk.Display.get_default().get_clipboard().set(text), controller.toast("Text copied")))
     if on_translate and fmt.needs_translation(tweet.get("lang")):
         item("Translate Post", on_translate)
     author = tweet.get("tweetBy") or {}
@@ -429,7 +433,7 @@ def quoted_card(tweet: dict, controller=None) -> Gtk.Box:
 # Detail-page counts; the ones with a sidecar `tweet.engagers` kind open the list of those people.
 _DETAIL_COUNTS = (
     ("retweetCount", "Repost", "Reposts", "retweeters"),
-    ("quoteCount", "Quote", "Quotes", None),
+    ("quoteCount", "Quote", "Quotes", "quotes"),
     ("likeCount", "Like", "Likes", "likers"),
     ("bookmarkCount", "Bookmark", "Bookmarks", None),
     ("viewCount", "View", "Views", None),
@@ -438,7 +442,7 @@ _DETAIL_COUNTS = (
 
 def _detail_stats(tweet: dict, controller=None) -> Gtk.Widget:
     """Full date and the complete counts, as on a post's own page. Reposts / Likes open who did
-    it; "Edited" opens the edit history."""
+    it, Quotes the posts quoting it; "Edited" opens the edit history."""
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=4)
     when = Gtk.Label(xalign=0, use_markup=True, css_classes=["dim-label", "detail-stats"])
     when_markup = GLib.markup_escape_text(fmt.full_time(tweet.get("createdAt")))
@@ -457,7 +461,8 @@ def _detail_stats(tweet: dict, controller=None) -> Gtk.Widget:
         if kind == "likers" and not mine:
             kind = None
         if kind and controller is not None:
-            text = f'<a href="perch:{kind}" title="See who">{text}</a>'
+            title = "See the quotes" if kind == "quotes" else "See who"
+            text = f'<a href="perch:{kind}" title="{title}">{text}</a>'
         parts.append(text)
     stats = None
     if parts:
@@ -471,6 +476,8 @@ def _detail_stats(tweet: dict, controller=None) -> Gtk.Widget:
         kind = uri.removeprefix("perch:")
         if kind == "history":
             controller.open_edit_history(tweet)
+        elif kind == "quotes":
+            controller.open_quotes(tweet)
         else:
             controller.open_engagers(tweet, kind)
         return True
