@@ -76,6 +76,7 @@ const INVALIDATES = {
 	'dm.markSeen': ['dm.inbox'],
 	'dm.deleteConversation': DM_READS,
 	'dm.react': DM_READS,
+	'poll.vote': TWEET_READS, // (the cached copies still have the poll without your vote)
 	'mutedWords.add': ['mutedWords.list'],
 	'mutedWords.remove': ['mutedWords.list'],
 };

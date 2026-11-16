@@ -10,6 +10,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Pango
 from perch import format as fmt
 from perch import images
 from perch.focal_picture import FocalPicture
+from perch.spelling import MessageBox
 from perch.paged_list import PagedListView
 
 # A photo attached to a DM (X serves it only with the session; see the sidecar's dm.media).
@@ -461,11 +462,12 @@ class ConversationPage(Adw.NavigationPage):
         self._stack.add_named(self._scroller, "messages")
 
         composer = Gtk.Box(spacing=6, margin_start=12, margin_end=12, margin_top=6, margin_bottom=6)
-        attach = Gtk.Button(icon_name="insert-image-symbolic", tooltip_text="Add Image")
+        attach = Gtk.Button(icon_name="insert-image-symbolic", tooltip_text="Add Image", valign=Gtk.Align.END)
         attach.add_css_class("flat")
         attach.connect("clicked", lambda *_: self._pick_image())
         composer.append(attach)
-        self._entry = Gtk.Entry(placeholder_text="Message", hexpand=True)
+        # Several lines if you like (Shift+Enter), spell checked; Enter sends.
+        self._entry = MessageBox(placeholder="Message")
         self._entry.connect("activate", lambda *_: self._send())
         self._entry.connect("changed", lambda *_: self._sync_send())
         composer.append(self._entry)
@@ -497,7 +499,7 @@ class ConversationPage(Adw.NavigationPage):
         bottom.append(self._reply_bar)
         bottom.append(self._attachment)
         bottom.append(composer)
-        self._send_button = Gtk.Button(icon_name="mail-send-symbolic", tooltip_text="Send", sensitive=False)
+        self._send_button = Gtk.Button(icon_name="mail-send-symbolic", tooltip_text="Send", sensitive=False, valign=Gtk.Align.END)
         self._send_button.add_css_class("suggested-action")
         self._send_button.add_css_class("circular")
         self._send_button.connect("clicked", lambda *_: self._send())

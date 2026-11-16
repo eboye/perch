@@ -572,6 +572,160 @@ def _link_under_pointer(widget: Gtk.Widget) -> str | None:
     return None
 
 
+class _WidePicture(FocalPicture):
+    """A picture as wide as it's given, and as tall as its proportions say (``ratio`` = w / h)."""
+
+    __gtype_name__ = "PerchWidePicture"
+
+    def __init__(self, ratio: float):
+        super().__init__()
+        self._ratio = ratio
+
+    def do_get_request_mode(self):
+        return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH
+
+    def do_measure(self, orientation, for_size):
+        if orientation == Gtk.Orientation.VERTICAL and for_size > 0:
+            height = round(for_size / self._ratio)
+            return height, height, -1, -1
+        return 0, 0, -1, -1
+
+
+def link_card(card: dict, controller=None) -> Gtk.Widget:
+    """A link preview, from X's card for the post's link: the page's picture, site, title and
+    description. Wide pictures go above the text (a play mark for video pages), small ones beside
+    it. Opens the link (inside Perch for X links)."""
+    url = card["url"]
+    style = card.get("style") or "large"
+    image = card.get("image") or {}
+    texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=8, margin_bottom=10, margin_start=12, margin_end=12, valign=Gtk.Align.CENTER, hexpand=True)
+    if domain := card.get("domain"):
+        texts.append(_label(domain, "dim-label", "caption", ellipsize=Pango.EllipsizeMode.END))
+    texts.append(_label(card["title"], "heading", "link-card-title", wrap=True, lines=2, ellipsize=Pango.EllipsizeMode.END))
+    if description := card.get("description"):
+        texts.append(_label(description, "dim-label", wrap=True, lines=2, ellipsize=Pango.EllipsizeMode.END))
+
+    picture = None
+    if image.get("url"):
+        if style in ("large", "player"):
+            # As wide as the post, in the picture's proportions (kept between square and 2.5:1).
+            width, height = image.get("width") or 0, image.get("height") or 0
+            picture = _WidePicture(min(max(width / height, 1.0), 2.5) if width and height else 1.91)
+        else:
+            picture = FocalPicture(width_request=96, height_request=96)
+        picture.update_property([Gtk.AccessibleProperty.LABEL], [image.get("alt") or ""])
+        images.load(image["url"], lambda tex, p=picture: tex and p.set_paintable(tex))
+
+    if picture is not None and style in ("large", "player"):
+        top: Gtk.Widget = picture
+        if style == "player":
+            play = Gtk.Image(icon_name="media-playback-start-symbolic", pixel_size=24, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, css_classes=["media-play"])
+            top = Gtk.Overlay(child=top)
+            top.add_overlay(play)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        content.append(top)
+        content.append(texts)
+    elif picture is not None:
+        content = Gtk.Box()
+        content.append(picture)
+        content.append(texts)
+    else:
+        content = texts
+
+    button = Gtk.Button(child=content, tooltip_text=url, css_classes=["flat", "link-card", f"link-card-{style}"], overflow=Gtk.Overflow.HIDDEN)
+    button.update_property([Gtk.AccessibleProperty.LABEL], [f"Link: {card['title']}" + (f", {domain}" if domain else "")])
+
+    def open_it(widget):
+        if controller is None or not controller.open_link(url):
+            Gtk.UriLauncher(uri=url).launch(widget.get_root(), None, None, None)
+
+    button.connect("clicked", open_it)
+    return button
+
+
+def poll_time_left(ends_at: str | None) -> str | None:
+    """'2 days left', '5 hours left', '12 minutes left', or None once it has ended."""
+    end = GLib.DateTime.new_from_iso8601(ends_at, GLib.TimeZone.new_utc()) if ends_at else None
+    if end is None:
+        return None
+    seconds = end.to_unix() - GLib.DateTime.new_now_utc().to_unix()
+    if seconds <= 0:
+        return None
+    for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if seconds >= size:
+            count = seconds // size
+            return f"{count} {unit}{'s' if count != 1 else ''} left"
+    return "Ending now"
+
+
+class PollView(Gtk.Box):
+    """A post's poll: a button per choice while it's open and you haven't voted; the results (a
+    bar per choice, your vote ticked, the leader in bold) once you have, once it has ended, or on
+    your own poll."""
+
+    def __init__(self, tweet: dict, controller):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6, css_classes=["poll"])
+        self._tweet = tweet
+        self._controller = controller
+        self._buttons: list[Gtk.Button] = []
+        self._render()
+
+    def _render(self) -> None:
+        while child := self.get_first_child():
+            self.remove(child)
+        self._buttons = []
+        poll = self._tweet["poll"]
+        left = poll_time_left(poll.get("endsAt"))
+        ended = poll.get("final") or left is None
+        mine = self._controller is not None and (self._tweet.get("tweetBy") or {}).get("id") == getattr(self._controller, "me_id", None)
+        can_vote = self._controller is not None and not ended and not poll.get("selected") and not mine
+        total = int(poll.get("total") or 0)
+        leader = max((c["count"] for c in poll["choices"]), default=0)
+        for number, choice in enumerate(poll["choices"], 1):
+            if can_vote:
+                button = Gtk.Button(label=choice["label"], css_classes=["poll-choice"])
+                button.update_property([Gtk.AccessibleProperty.LABEL], [f"Vote for {choice['label']}"])
+                button.connect("clicked", lambda *_, n=number: self._vote(n))
+                self._buttons.append(button)
+                self.append(button)
+                continue
+            share = choice["count"] / total if total else 0
+            row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3, css_classes=["poll-result"])
+            if choice["count"] == leader and leader > 0:
+                row.add_css_class("leader")
+            line = Gtk.Box(spacing=6)
+            text = choice["label"] + ("  ✓" if poll.get("selected") == number else "")
+            line.append(_label(text, "choice", hexpand=True, wrap=True))
+            line.append(_label(f"{round(share * 100)}%", "numeric"))
+            row.append(line)
+            row.append(Gtk.ProgressBar(fraction=share))
+            yours = ", your vote" if poll.get("selected") == number else ""
+            row.update_property([Gtk.AccessibleProperty.LABEL], [f"{choice['label']}: {round(share * 100)}%{yours}"])
+            self.append(row)
+        votes = f"{total:,} vote{'s' if total != 1 else ''}"
+        self.append(_label(f"{votes} · {'Final results' if ended else left}", "dim-label", "caption"))
+
+    def _vote(self, number: int) -> None:
+        poll = self._tweet["poll"]
+        for button in self._buttons:
+            button.set_sensitive(False)
+
+        def done(result, error):
+            if error:
+                for button in self._buttons:
+                    button.set_sensitive(True)
+                self._controller.toast(self._controller.describe_error(error, "Couldn't vote"))
+                return
+            self._tweet["poll"] = result
+            self._render()
+
+        self._controller.sidecar.call(
+            "poll.vote",
+            {"tweetId": self._tweet.get("id"), "cardUri": poll.get("cardUri"), "cardName": poll.get("cardName"), "choice": number},
+            done,
+        )
+
+
 class TweetRow(Gtk.ListBoxRow):
     """One post. ``detailed=True`` is the focused post on its own page: larger text, full date
     and counts, and not clickable (it's already open)."""
@@ -628,6 +782,10 @@ class TweetRow(Gtk.ListBoxRow):
         content.append(self._translation)
         if media := _media(shown.get("media"), controller, shown.get("url")):
             content.append(media)
+        if shown.get("poll"):
+            content.append(PollView(shown, controller))
+        elif shown.get("linkCard") and not shown.get("media") and not shown.get("quoted"):
+            content.append(link_card(shown["linkCard"], controller))
         for space_id in fmt.space_ids(shown):
             content.append(_space_card(space_id, controller))
         if shown.get("quoted"):

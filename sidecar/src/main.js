@@ -17,7 +17,10 @@ const { signedFetch } = require('./xhttp');
 const inbox = require('./inbox');
 const demo = require('./demo');
 const { ResponseCache, isNetworkError } = require('./cache');
-const { expandLinks } = require('./links');
+const { expandLinks, parseLinkCard } = require('./links');
+const { mediaInfo, uploadChunked } = require('./media');
+const { parsePoll, voteForm, pollCardData, VOTE_URL, CREATE_URL } = require('./poll');
+const { TweetRequests } = require('rettiwt-api/dist/requests/Tweet');
 const { UserRequests } = require('rettiwt-api/dist/requests/User');
 const { CursoredData } = require('rettiwt-api/dist/models/data/CursoredData');
 const { BaseType } = require('rettiwt-api/dist/enums/Data');
@@ -462,13 +465,18 @@ const methods = {
 		return { list: data.list.map(serializeUser), next: data.next };
 	},
 
-	// { text, replyTo?, quote?, media?: [{ path, alt? }] (or legacy mediaPaths: string[]) } -> { id }
-	'tweet.post': async ({ text, replyTo, quote, media: attachments, mediaPaths }) => {
+	// { text, replyTo?, quote?, media?: [{ path, alt? }] (or legacy mediaPaths: string[]),
+	//   poll?: { choices: string[], minutes } } -> { id }. Uploads report progress (see uploadMedia).
+	'tweet.post': async ({ text, replyTo, quote, media: attachments, mediaPaths, poll }, ctx) => {
 		const items = (attachments || (mediaPaths || []).map((path) => ({ path }))).filter((m) => m?.path).slice(0, 4);
 		if (!text?.trim() && items.length === 0) throw new Error('Nothing to post');
-		if (demoMode) return { id: String(Date.now()) };
+		checkMediaMix(items);
+		if (poll && items.length) throw new Error('A post can have a poll or media, not both');
+		const cardData = poll ? pollCardData(poll) : null;
+		if (demoMode) return demo.post({ text, replyTo, quote, poll: cardData && poll, media: items.map((m) => mediaInfo(m.path).kind) }, ctx?.progress);
 		const tweets = requireClient().tweet;
-		const media = await uploadMedia(tweets, items);
+		const media = await uploadMedia(tweets, items, ctx?.progress);
+		if (cardData) return { id: await postWithCard({ text, replyTo, cardUri: await createPollCard(cardData) }) };
 		const id = await tweets.post({
 			text: text || undefined,
 			replyTo: replyTo || undefined,
@@ -480,14 +488,15 @@ const methods = {
 	},
 
 	// Schedule a new post (X can't schedule replies or quotes). { text, media?: [{ path, alt? }], at: unix seconds } -> { id }
-	'tweet.schedule': async ({ text, media: attachments, at }) => {
+	'tweet.schedule': async ({ text, media: attachments, at }, ctx) => {
 		const items = (attachments || []).filter((m) => m?.path).slice(0, 4);
+		checkMediaMix(items);
 		if (!text?.trim() && items.length === 0) throw new Error('Nothing to schedule');
 		const when = Number(at);
 		if (!Number.isFinite(when) || when * 1000 < Date.now() + 60_000) throw new Error('Pick a time at least a minute from now');
 		if (demoMode) return demo.schedule(text, items.length, when);
 		const tweets = requireClient().tweet;
-		const media = await uploadMedia(tweets, items);
+		const media = await uploadMedia(tweets, items, ctx?.progress);
 		const id = await tweets.schedule({ text: text || undefined, media: media.length ? media : undefined, scheduleFor: new Date(when * 1000) });
 		if (!id) throw new Error('X did not confirm the scheduled post');
 		return { id };
@@ -520,6 +529,22 @@ const methods = {
 		const ok = await requireClient().tweet.unschedule(String(id));
 		if (!ok) throw new Error('X did not confirm cancelling the scheduled post');
 		return { ok: true };
+	},
+
+	// Vote in a poll. { tweetId, cardUri, cardName, choice (1-based) } -> the poll with your vote.
+	'poll.vote': async ({ tweetId, cardUri, cardName, choice }) => {
+		const form = voteForm({ tweetId, cardUri, cardName, choice });
+		if (demoMode) return demo.vote(String(tweetId), Number(choice));
+		const res = await signedFetch(requireClient(), new URL(VOTE_URL), {
+			method: 'POST',
+			headers: { 'content-type': 'application/x-www-form-urlencoded' },
+			body: form.toString(),
+		});
+		const body = await res.json().catch(() => ({}));
+		if (!res.ok) throw Object.assign(new Error(body?.errors?.[0]?.message || `Couldn’t vote (HTTP ${res.status})`), { status: res.status });
+		const poll = parsePoll(body?.card);
+		if (!poll) throw new Error('X didn’t return the poll after voting');
+		return { ...poll, cardUri: poll.cardUri || cardUri, selected: poll.selected || Number(choice) };
 	},
 
 	'space.details': async ({ id }) => {
@@ -555,16 +580,54 @@ function toUnixSeconds(value) {
 	return n > 1e11 ? Math.round(n / 1000) : n;
 }
 
+// A post takes up to 4 images, or one GIF, or one video.
+function checkMediaMix(items) {
+	const kinds = items.map((m) => mediaInfo(m.path).kind);
+	if (kinds.length > 1 && kinds.some((k) => k !== 'image')) throw new Error('A post can have up to 4 images, or one GIF or video');
+}
+
 // Upload attachments, adding alt text after each upload and before the post. -> [{ id }]
-async function uploadMedia(tweets, items) {
+// Videos and GIFs go up in chunks (see media.js); `progress({ phase, fraction })` follows along.
+async function uploadMedia(tweets, items, progress = () => {}) {
 	const media = [];
 	for (const item of items) {
-		const mediaId = await tweets.upload(item.path);
+		const info = mediaInfo(item.path);
+		const mediaId =
+			info.kind === 'image'
+				? await tweets.upload(item.path)
+				: await uploadChunked((url, init) => signedFetch(requireClient(), url, init), item.path, { onProgress: progress });
 		const alt = String(item.alt || '').trim().slice(0, MAX_ALT_TEXT);
 		if (alt) await tweets.setMediaMetadata(mediaId, { altText: alt });
 		media.push({ id: mediaId });
 	}
 	return media;
+}
+
+// A poll card for a new post. -> card uri ("card://…")
+async function createPollCard(cardData) {
+	const res = await signedFetch(requireClient(), new URL(CREATE_URL), {
+		method: 'POST',
+		headers: { 'content-type': 'application/x-www-form-urlencoded' },
+		body: new URLSearchParams({ card_data: JSON.stringify(cardData) }).toString(),
+	});
+	const body = await res.json().catch(() => ({}));
+	if (!res.ok || !body?.card_uri) throw Object.assign(new Error(body?.errors?.[0]?.message || `Couldn’t create the poll (HTTP ${res.status})`), { status: res.status });
+	return body.card_uri;
+}
+
+// CreateTweet as rettiwt builds it, plus the poll card (rettiwt has no option for cards). -> id
+async function postWithCard({ text, replyTo, cardUri }) {
+	const config = TweetRequests.post({ text: text || undefined, replyTo: replyTo || undefined });
+	config.data.variables.card_uri = cardUri;
+	const res = await signedFetch(requireClient(), new URL(config.url), {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(config.data),
+	});
+	const body = await res.json().catch(() => ({}));
+	const id = body?.data?.create_tweet?.tweet_results?.result?.rest_id;
+	if (!res.ok || !id) throw Object.assign(new Error(body?.errors?.[0]?.message || `Couldn’t post (HTTP ${res.status})`), { status: res.status });
+	return String(id);
 }
 
 // POST a urlencoded form to a v1.1 account endpoint; throws with X's message on failure.
@@ -704,6 +767,13 @@ function serializeTweet(tweet) {
 	out.edited = editIds.length > 1;
 	pickVideoVariants(out, legacy);
 	out.fullText = expandLinks(out.fullText, tweet.raw, tweet.quoted?.id);
+	const poll = parsePoll(tweet.raw?.card);
+	if (poll) out.poll = poll;
+	// A link preview, for a post whose link is all it has (no photos, video, quote or poll).
+	else if (!out.media?.length && !tweet.quoted) {
+		const linkCard = parseLinkCard(tweet.raw?.card, tweet.raw);
+		if (linkCard) out.linkCard = linkCard;
+	}
 	if (tweet.quoted) out.quoted = serializeTweet(tweet.quoted);
 	if (tweet.retweetedTweet) out.retweetedTweet = serializeTweet(tweet.retweetedTweet);
 	return out;
@@ -751,6 +821,8 @@ async function handle(line) {
 	}
 	const { id, method, params } = request;
 	const fn = methods[method];
+	// Long calls (uploads) report progress as extra frames for the same request id.
+	const ctx = { progress: (data) => writeFrame(JSON.stringify({ id, event: 'progress', data }) + '\n') };
 	if (process.env.PERCH_DEBUG_RPC === '1') {
 		// Development trace: method plus identifier-like params only (never text, keys or paths).
 		const ids = Object.fromEntries(Object.entries(params || {}).filter(([k]) => /(^id$|Id$|^kind$|^action$)/.test(k)));
@@ -762,7 +834,7 @@ async function handle(line) {
 			// UI tests: PERCH_DEMO_OFFLINE_FILE names a file whose presence means "X can't be reached"
 			// (thrown the way the real library reports it).
 			if (demoMode && demo.offline() && !LOCAL_METHODS.has(method)) throw Object.assign(new Error('connect ENETUNREACH 192.0.2.1:443'), { status: 500 });
-			return fn(clean);
+			return fn(clean, ctx);
 		});
 		writeFrame(JSON.stringify({ id, result }) + '\n');
 	} catch (err) {

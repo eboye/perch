@@ -162,7 +162,7 @@ def load(url: str | None, callback: Callback, cache: bool = True, disk: bool | N
     """
     if not url:
         return
-    disk = cache if disk is None else disk
+    disk = (cache if disk is None else disk) and not url.startswith("data:")  # (inline images: nothing to keep)
     _schedule_trim()
     if not cache:
         def work():  # fetch + decode off the main thread; textures are immutable and thread-safe to create

@@ -39,6 +39,7 @@ class Sidecar:
     def __init__(self) -> None:
         self._proc: subprocess.Popen | None = None
         self._pending: dict[int, Callback] = {}
+        self._progress: dict[int, Callable[[dict], None]] = {}  # request id -> progress callback
         self._next_id = 1
         self._lock = threading.Lock()
         self._api_key: str | None = None
@@ -84,8 +85,15 @@ class Sidecar:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if msg.get("event") == "progress":
+                with self._lock:
+                    on_progress = self._progress.get(msg.get("id"))
+                if on_progress is not None:
+                    GLib.idle_add(lambda cb=on_progress, data=msg.get("data") or {}: cb(data) or GLib.SOURCE_REMOVE)
+                continue
             with self._lock:
                 callback = self._pending.pop(msg.get("id"), None)
+                self._progress.pop(msg.get("id"), None)
             if callback is None:
                 continue
             if err := msg.get("error"):
@@ -97,14 +105,17 @@ class Sidecar:
         with self._lock:
             orphans = list(self._pending.values())
             self._pending.clear()
+            self._progress.clear()
         for callback in orphans:
             GLib.idle_add(callback, None, RpcError("The sidecar process exited unexpectedly", "sidecar"))
 
-    def _send(self, method: str, params: dict, callback: Callback) -> None:
+    def _send(self, method: str, params: dict, callback: Callback, on_progress=None) -> None:
         with self._lock:
             request_id = self._next_id
             self._next_id += 1
             self._pending[request_id] = callback
+            if on_progress is not None:
+                self._progress[request_id] = on_progress
         frame = json.dumps({"id": request_id, "method": method, "params": params}) + "\n"
         try:
             self._proc.stdin.write(frame)
@@ -112,12 +123,14 @@ class Sidecar:
         except OSError as err:
             with self._lock:
                 self._pending.pop(request_id, None)
+                self._progress.pop(request_id, None)
             GLib.idle_add(callback, None, RpcError(f"Sidecar write failed: {err}", "sidecar"))
 
     # -- public API ---------------------------------------------------------
 
-    def call(self, method: str, params: dict | None, callback: Callback) -> None:
-        """The sidecar caches reads for a short while; calls made inside ``fresh()`` skip that."""
+    def call(self, method: str, params: dict | None, callback: Callback, on_progress: Callable[[dict], None] | None = None) -> None:
+        """The sidecar caches reads for a short while; calls made inside ``fresh()`` skip that.
+        ``on_progress({"phase", "fraction"})`` follows long calls (uploads) on the main loop."""
 
         def deliver(result, error):
             if error is not None:
@@ -135,7 +148,7 @@ class Sidecar:
         params = dict(params or {})
         if self._fresh_depth:
             params["fresh"] = True
-        self._send(method, params, deliver)
+        self._send(method, params, deliver, on_progress)
 
     def fresh(self, fn: Callable, *args) -> None:
         """Run ``fn`` so that every sidecar call it makes asks X instead of the cache (refresh, retry)."""

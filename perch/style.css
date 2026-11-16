@@ -383,3 +383,81 @@ button.small-pill {
   padding: 2px 12px;
   font-size: 0.9em;
 }
+
+/* DM message box: looks like an entry, grows to a few lines as you type. */
+scrolledwindow.message-box {
+  border-radius: 18px;
+  background: alpha(currentColor, 0.08);
+}
+
+scrolledwindow.message-box textview,
+scrolledwindow.message-box textview text {
+  background: none;
+}
+
+scrolledwindow.message-box:focus-within {
+  outline: 2px solid alpha(var(--accent-color), 0.5);
+  outline-offset: -2px;
+}
+
+/* Polls: a button per choice while you can vote, bars once you have (or it ended). */
+.poll {
+  margin-top: 4px;
+}
+
+button.poll-choice {
+  min-height: 32px;
+  border-radius: 999px;
+  border: 1px solid alpha(var(--accent-color), 0.6);
+  background: none;
+  color: var(--accent-color);
+  font-weight: bold;
+}
+
+button.poll-choice:hover {
+  background: alpha(var(--accent-color), 0.1);
+}
+
+.poll-result progressbar trough,
+.poll-result progressbar progress {
+  min-height: 6px;
+  border-radius: 3px;
+}
+
+.poll-result.leader label.choice {
+  font-weight: bold;
+}
+
+/* Compose: the poll being written. */
+.poll-editor {
+  padding: 10px 12px;
+}
+
+/* Link previews (X's card for a post's only link). */
+button.link-card {
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid alpha(currentColor, 0.15);
+  font-weight: normal;
+}
+
+button.link-card:hover {
+  background: alpha(currentColor, 0.04);
+}
+
+button.link-card picture {
+  background: alpha(currentColor, 0.06);
+}
+
+button.link-card-large picture,
+button.link-card-player picture {
+  border-bottom: 1px solid alpha(currentColor, 0.1);
+}
+
+button.link-card-small picture {
+  border-right: 1px solid alpha(currentColor, 0.1);
+}
+
+.link-card-title {
+  font-size: 1em;
+}

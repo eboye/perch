@@ -65,7 +65,18 @@ def _release_now(widget: Gtk.Widget) -> None:
         for extra in getattr(current, "releasable", ()):  # e.g. Gio actions whose callbacks capture a page
             GObject.signal_handlers_destroy(extra)
         if isinstance(current, Gtk.TextView):  # handlers on the text buffer (not a widget)
-            GObject.signal_handlers_destroy(current.get_buffer())
+            if adapter := getattr(current, "spelling", None):
+                # Spell checking (see spelling.py): unhook its right-click menu and actions first;
+                # GTK's menu code would otherwise read the menu model while it's being freed.
+                current.set_extra_menu(None)
+                current.insert_action_group("spelling", None)
+                adapter.set_enabled(False)
+                current.spelling = None
+                # GtkSourceView and libspelling keep (and later drop) handlers of their own on the
+                # buffer: drop only the signal Perch connects there.
+                _disconnect_signals(current.get_buffer(), ("changed",))
+            else:
+                GObject.signal_handlers_destroy(current.get_buffer())
         if isinstance(current, _KEEP_HANDLERS):
             continue
         if isinstance(current, Adw.EntryRow):  # libadwaita keeps handlers on it too: drop only Perch's

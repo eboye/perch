@@ -40,6 +40,45 @@ function stamp(minutesAgo) {
 	return `${day} ${mon} ${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} +0000 ${d.getUTCFullYear()}`;
 }
 
+const votes = new Map(); // demo poll votes: tweet id -> choice (1-based)
+
+function demoPoll(id, ended) {
+	const counts = ended ? [412, 1310, 96] : [57, 31, 12, 4];
+	const labels = ended ? ['Tabs', 'Spaces', 'Whatever the linter says'] : ['GTK', 'Qt', 'Electron', 'Something else'];
+	const choice = ended ? 2 : votes.get(id) || null;
+	const choices = labels.map((label, i) => ({ label, count: counts[i] + (votes.get(id) === i + 1 ? 1 : 0) }));
+	return {
+		cardUri: `card://${id}0`,
+		cardName: `poll${labels.length}choice_text_only`,
+		choices,
+		total: choices.reduce((sum, c) => sum + c.count, 0),
+		endsAt: new Date(Date.now() + (ended ? -2 : 26) * 3600 * 1000).toISOString(),
+		final: ended,
+		selected: choice,
+	};
+}
+
+// Voting in a demo poll. -> the poll with your vote
+function vote(id, choice) {
+	votes.set(id, choice);
+	return demoPoll(id, false);
+}
+
+// Posting in demo mode: uploads of videos / GIFs report progress like the real ones.
+async function post({ media }, progress = () => {}) {
+	if ((media || []).some((kind) => kind !== 'image')) {
+		for (const fraction of [0.25, 0.5, 0.75, 1]) {
+			progress({ phase: 'upload', fraction });
+			await new Promise((resolve) => setTimeout(resolve, 150));
+		}
+		for (const fraction of [0.3, 0.8]) {
+			progress({ phase: 'processing', fraction });
+			await new Promise((resolve) => setTimeout(resolve, 150));
+		}
+	}
+	return { id: String(Date.now()) };
+}
+
 function tweet(n, kind, nested = false) {
 	const by = users[(n + (kind === 'foryou' ? 2 : 0)) % users.length];
 	const id = String(900000 + n * 7 + (kind === 'foryou' ? 1 : 0));
@@ -64,7 +103,7 @@ function tweet(n, kind, nested = false) {
 	};
 	if (n % 11 === 2) t.edited = true;
 	if (n % 9 === 6) {
-		t.fullText = 'Going live in a Space about GTK app design — come hang out https://t.co/demoSpace';
+		t.fullText = 'Going live in a Space about GTK app design — come hang out https://x.com/i/spaces/1DemoSpaceAbc';
 		t.entities.urls = ['https://x.com/i/spaces/1DemoSpaceAbc'];
 	}
 	if (n % 10 === 8 && n > 0) {
@@ -74,6 +113,26 @@ function tweet(n, kind, nested = false) {
 		t.fullText = `@${parent.tweetBy.userName} ${t.fullText}`;
 	}
 	if (nested) return t;
+	// Polls: one still open on Following, one that has ended (with your vote).
+	if (kind === 'following' && (n === 5 || n === 12)) {
+		t.poll = demoPoll(id, n === 12);
+		// Someone else's poll (you can't vote in your own).
+		if (t.tweetBy.id === users[0].id) {
+			t.tweetBy = users[1];
+			t.url = `https://x.com/${users[1].userName}/status/${id}`;
+		}
+	}
+	// A link preview on the post that links the Flatpak docs: large on Following, small on For You.
+	if (t.fullText.includes('docs.flatpak.org') && !t.retweetedTweet && n % 6 !== 3) {
+		t.linkCard = {
+			url: 'https://docs.flatpak.org/en/latest/',
+			title: 'Flatpak — the future of application distribution',
+			description: 'Build, distribute and run sandboxed desktop applications on Linux.',
+			domain: 'docs.flatpak.org',
+			image: { url: `data:image/png;base64,${DEMO_PHOTO_PNG}`, width: 2, height: 1, alt: 'The Flatpak logo' },
+			style: kind === 'foryou' ? 'small' : 'large',
+		};
+	}
 	if (n % 6 === 3) t.quoted = tweet(n + 50, kind, true);
 	if (n % 5 === 4) {
 		const original = tweet(n + 100, kind, true);
@@ -463,6 +522,8 @@ function offline() {
 }
 
 module.exports = {
+	vote,
+	post,
 	offline,
 	signIn,
 	react,

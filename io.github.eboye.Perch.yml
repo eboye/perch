@@ -43,6 +43,25 @@ modules:
       - npm run build
       - install -Dm644 dist/sidecar.cjs /app/share/perch/sidecar/dist/sidecar.cjs
 
+  # Spell checking in the compose and message boxes. Enchant, hunspell and the dictionaries come
+  # with the GNOME runtime; libspelling itself doesn't.
+  - name: libspelling
+    buildsystem: meson
+    config-opts:
+      - -Ddocs=false
+      - -Dvapi=false
+      - -Dintrospection=enabled
+      - -Dsysprof=false
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share/gir-1.0
+    sources:
+      - type: git
+        url: https://gitlab.gnome.org/GNOME/libspelling.git
+        tag: 0.4.11
+        commit: 9e5d5ce2d3519551ac8a5430332e823e71bbc4ce
+
   - name: perch
     buildsystem: simple
     sources:
