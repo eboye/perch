@@ -78,7 +78,7 @@ class ScheduledPage(Adw.NavigationPage):
         new = Gtk.Button(icon_name="document-edit-symbolic", tooltip_text="New Post (Ctrl+N)", action_name="win.compose")
         headerbar.pack_start(new)
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh (Ctrl+R)")
-        refresh.connect("clicked", lambda *_: self.reload())
+        refresh.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))
         headerbar.pack_end(refresh)
         view = Adw.ToolbarView(content=self._view)
         view.add_top_bar(headerbar)

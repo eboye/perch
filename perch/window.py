@@ -44,6 +44,8 @@ class PerchWindow(Adw.ApplicationWindow):
         super().__init__(application=app, title=APP_NAME, default_width=600, default_height=880)
         self.set_size_request(360, 400)
         self._sidecar = sidecar
+        self._stale_toast_at = -60_000_000
+        sidecar.on_stale = self._on_stale
         self._me: dict | None = None
         self._demo = False
         self._opening_post = False  # a post is being fetched to open its page
@@ -662,12 +664,22 @@ class PerchWindow(Adw.ApplicationWindow):
         if not self._signed_in():
             return
         page = self._nav.get_visible_page()
+        # A refresh always asks X (the sidecar otherwise reuses results for a short while).
         if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage, PeoplePage, EditHistoryPage, ScheduledPage)):
-            page.reload()
+            self._sidecar.fresh(page.reload)
             return
         view = self._views[self._current_tab()]
         view.scroll_to_top()
-        view.reload()
+        self._sidecar.fresh(view.reload)
+
+    def _on_stale(self, age: int) -> None:
+        """X failed (rate limit, offline) and the sidecar answered with a saved copy."""
+        now = GLib.get_monotonic_time()
+        if now - self._stale_toast_at < 60_000_000:
+            return
+        self._stale_toast_at = now
+        minutes = max(1, round(age / 60))
+        self.toast(f"Couldn't reach X — showing what Perch loaded {minutes} min ago")
 
     def _ensure_loaded(self) -> None:
         if not self._signed_in():

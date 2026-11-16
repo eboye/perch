@@ -40,7 +40,7 @@ class PagedListView(Gtk.Stack):
         self._error_page = Adw.StatusPage(icon_name="network-error-symbolic", title=self.error_title)
         retry = Gtk.Button(label="Try Again", halign=Gtk.Align.CENTER)
         retry.add_css_class("pill")
-        retry.connect("clicked", lambda *_: self.reload())
+        retry.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))
         self._error_page.set_child(retry)
         self.add_named(self._error_page, "error")
 

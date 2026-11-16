@@ -40,6 +40,10 @@ class Sidecar:
         self._next_id = 1
         self._lock = threading.Lock()
         self._api_key: str | None = None
+        self._fresh_depth = 0
+        # Called with the copy's age in seconds when X failed (rate limit, offline) and the sidecar
+        # answered from its cache instead.
+        self.on_stale: Callable[[int], None] | None = None
 
     # -- process management -------------------------------------------------
 
@@ -111,7 +115,11 @@ class Sidecar:
     # -- public API ---------------------------------------------------------
 
     def call(self, method: str, params: dict | None, callback: Callback) -> None:
+        """The sidecar caches reads for a short while; calls made inside ``fresh()`` skip that."""
+
         def deliver(result, error):
+            if isinstance(result, dict) and result.get("stale") and self.on_stale:
+                self.on_stale(int(result["stale"]))
             callback(result, error)
             return GLib.SOURCE_REMOVE
 
@@ -120,7 +128,18 @@ class Sidecar:
         except RpcError as err:
             GLib.idle_add(deliver, None, err)
             return
-        self._send(method, params or {}, deliver)
+        params = dict(params or {})
+        if self._fresh_depth:
+            params["fresh"] = True
+        self._send(method, params, deliver)
+
+    def fresh(self, fn: Callable, *args) -> None:
+        """Run ``fn`` so that every sidecar call it makes asks X instead of the cache (refresh, retry)."""
+        self._fresh_depth += 1
+        try:
+            fn(*args)
+        finally:
+            self._fresh_depth -= 1
 
     def sign_in(self, api_key: str, callback: Callback) -> None:
         def done(result, error):

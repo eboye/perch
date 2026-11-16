@@ -16,8 +16,10 @@ const { Rettiwt } = require('rettiwt-api');
 const { signedFetch } = require('./xhttp');
 const inbox = require('./inbox');
 const demo = require('./demo');
+const { ResponseCache } = require('./cache');
 
 let client = null;
+const cache = new ResponseCache();
 const demoMode = process.env.PERCH_DEMO === '1';
 
 function requireClient() {
@@ -651,7 +653,8 @@ async function handle(line) {
 	}
 	try {
 		if (!fn) throw new Error(`Unknown method: ${method}`);
-		writeFrame(JSON.stringify({ id, result: await fn(params || {}) }) + '\n');
+		const result = await cache.run(method, params, (clean) => fn(clean));
+		writeFrame(JSON.stringify({ id, result }) + '\n');
 	} catch (err) {
 		console.error(`[sidecar] ${method} failed:`, err?.message || err);
 		writeFrame(JSON.stringify({ id, error: classify(err) }) + '\n');

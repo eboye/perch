@@ -113,11 +113,16 @@ const conversations = [
 	['1001-1002', users[1], ['Did you see the new libadwaita release?', 'Yes! The breakpoints work great.', 'Want to pair on Perch later?'], 4, true],
 	['1001-1003', users[2], ['Thanks for the review 🙏', 'https://www.youtube.com/watch?v=abcdefghijk', 'Anytime'], 80, false],
 	['1001-1005', users[4], ['Space tonight at 8?'], 600, false],
+	// Second (older) inbox page, reached by scrolling.
+	['1001-1004', users[3], ['Welcome to the club!'], 60 * 24 * 90, false],
+	['1002-1001', users[1], ['Old thread from last year'], 60 * 24 * 400, false],
 ];
+const INBOX_PAGE = 3;
 
-function inbox() {
+function inbox(cursor) {
+	const page = cursor === 'older' ? conversations.slice(INBOX_PAGE) : conversations.slice(0, INBOX_PAGE);
 	return {
-		conversations: conversations.map(([id, other, texts, minutes, unread]) => ({
+		conversations: page.map(([id, other, texts, minutes, unread]) => ({
 			id,
 			type: 'ONE_TO_ONE',
 			name: null,
@@ -129,7 +134,7 @@ function inbox() {
 			lastMessage: { id: `${id}-m${texts.length - 1}`, senderId: unread ? other.id : users[0].id, text: texts[texts.length - 1], createdAt: iso(minutes), isEncrypted: false, mediaUrls: [] },
 			unread,
 		})),
-		cursor: '',
+		cursor: cursor === 'older' ? '' : 'older',
 		users: usersById(),
 	};
 }
@@ -148,8 +153,32 @@ function conversation(id) {
 	messages.splice(1, 0, { id: `${cid}-enc`, senderId: other.id, text: '', createdAt: iso(minutes + 30), isEncrypted: true, mediaUrls: [] });
 	// A message type Perch can't show (no text, no media, not encrypted).
 	if (cid === '1001-1003') messages.push({ id: `${cid}-blank`, senderId: other.id, text: '', createdAt: iso(minutes + 1), isEncrypted: false, mediaUrls: [] });
+	// A long conversation: enough recent messages for "Load Earlier Messages" to show.
+	if (cid === '1001-1002') {
+		for (let i = 0; i < 24; i++) {
+			messages.push({ id: `${cid}-r${i}`, senderId: i % 2 ? users[0].id : other.id, text: `Recent message ${i + 1}`, createdAt: iso(minutes + 60 + (24 - i) * 10), isEncrypted: false, mediaUrls: [] });
+		}
+	}
 	messages.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 	return { id: cid, messages, hasMore: false, cursor: '', participants: [users[0].id, other.id], users: usersById() };
+}
+
+// Older history of the long demo conversation: two pages (30, then 10 messages), then the start.
+function olderMessages(id, before) {
+	const other = users[1];
+	const secondPage = String(before).includes('-old1-');
+	const count = secondPage ? 10 : 30;
+	const base = secondPage ? 60 * 24 * 400 : 60 * 24 * 30;
+	const prefix = secondPage ? 'old2' : 'old1';
+	const messages = Array.from({ length: count }, (_, i) => ({
+		id: `${id}-${prefix}-${i}`,
+		senderId: i % 2 ? users[0].id : other.id,
+		text: `${secondPage ? 'Very old' : 'Older'} message ${i + 1}`,
+		createdAt: iso(base + (count - i) * 60),
+		isEncrypted: false,
+		mediaUrls: [],
+	}));
+	return { messages, cursor: secondPage ? '' : `${id}-old1-0`, users: usersById() };
 }
 
 const participant = (u) =>({ id: u.id, screenName: u.userName, displayName: u.fullName, avatarUrl: '', isVerified: u.isVerified });
@@ -318,6 +347,7 @@ function unschedule(id) {
 }
 
 module.exports = {
+	olderMessages,
 	muted,
 	setMuted,
 	suggestions,

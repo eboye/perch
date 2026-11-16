@@ -115,7 +115,7 @@ class PeoplePage(Adw.NavigationPage):
 
         headerbar = Adw.HeaderBar(title_widget=Adw.WindowTitle(title=title, subtitle=subtitle))
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh (Ctrl+R)")
-        refresh.connect("clicked", lambda *_: self.reload())
+        refresh.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))
         headerbar.pack_end(refresh)
 
         view = Adw.ToolbarView(content=self._view)

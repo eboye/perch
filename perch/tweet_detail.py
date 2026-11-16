@@ -62,7 +62,7 @@ class TweetDetailPage(Adw.NavigationPage):
 
         headerbar = Adw.HeaderBar()
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh (Ctrl+R)")
-        refresh.connect("clicked", lambda *_: self.reload())
+        refresh.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))
         headerbar.pack_end(refresh)
         if url := tweet.get("url"):
             browser = Gtk.Button(icon_name="web-browser-symbolic", tooltip_text="Open in Browser")

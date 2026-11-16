@@ -68,6 +68,36 @@ function serializeMessage(message) {
 
 const byTime = (a, b) => new Date(a.createdAt) - new Date(b.createdAt);
 
+// A message from the REST conversation timeline, in serializeMessage's shape. t.co links are
+// expanded; a link that only stands for an attached photo/video is dropped (the media is listed).
+function serializeRestMessage(message) {
+	const data = message.message_data || {};
+	let text = data.text || '';
+	const media = data.attachment?.photo || data.attachment?.video || data.attachment?.animated_gif;
+	for (const link of data.entities?.urls || []) {
+		if (link.url && link.expanded_url) text = text.split(link.url).join(link.expanded_url);
+	}
+	if (media?.url) text = text.split(media.url).join('');
+	const mediaUrls = media?.media_url_https ? [media.media_url_https] : [];
+	return {
+		id: String(message.id || data.id),
+		senderId: String(data.sender_id || ''),
+		text: text.trim(),
+		createdAt: new Date(Number(message.time || data.time)).toISOString(),
+		isEncrypted: false,
+		mediaUrls,
+	};
+}
+
+// Cursor for the next (older) page of the inbox, or '' at the end. rettiwt's first-page cursor is
+// the inbox's live-update cursor, which returns an empty page when used for paging; older
+// conversations page by the trusted timeline's min_entry_id instead.
+function olderCursor(raw, currentCursor) {
+	const timeline = raw.inbox_initial_state ? raw.inbox_initial_state.inbox_timelines?.trusted : raw.inbox_timeline;
+	if (!timeline || timeline.status !== 'HAS_MORE' || !timeline.min_entry_id) return '';
+	return timeline.min_entry_id === currentCursor ? '' : String(timeline.min_entry_id);
+}
+
 function methods({ requireClient, demoMode }) {
 	return {
 		// { cursor? } -> { list: [{ id, message, receivedAt, icon, url, from[], target[] }], next, users }
@@ -92,7 +122,7 @@ function methods({ requireClient, demoMode }) {
 
 		// { cursor?, meId } -> { conversations: [...], cursor, users }
 		'dm.inbox': async ({ cursor, meId }) => {
-			if (demoMode) return demo.inbox();
+			if (demoMode) return demo.inbox(cursor);
 			const client = requireClient();
 			const inbox = await client.dm.inbox(cursor || undefined);
 			const raw = inbox.raw || {};
@@ -133,7 +163,7 @@ function methods({ requireClient, demoMode }) {
 				.reduce((max, c) => (!max || isNewer(c.newestEventId, max) ? c.newestEventId : max), null);
 			return {
 				conversations,
-				cursor: inbox.cursor || '',
+				cursor: olderCursor(raw, cursor),
 				users,
 				newestEventId,
 				lastSeenEventId: inbox.trustedLastSeenEventId || inbox.lastSeenEventId || null,
@@ -199,11 +229,52 @@ function methods({ requireClient, demoMode }) {
 			};
 		},
 
+		// Messages older than `before` (a message id), from X's REST conversation history, which pages
+		// back to the start (the GraphQL page the conversation opens with can't).
+		// { id, before } -> { messages (oldest first), cursor ('' at the start), users }
+		'dm.older': async ({ id, before }) => {
+			if (!id || !before) throw new Error('Missing conversation or message id');
+			if (demoMode) return demo.olderMessages(id, before);
+			const client = requireClient();
+			const url = new URL(`https://x.com/i/api/1.1/dm/conversation/${encodeURIComponent(String(id))}.json`);
+			url.search = new URLSearchParams({
+				max_id: String(before),
+				count: '100',
+				context: 'FETCH_DM_CONVERSATION_HISTORY',
+				include_groups: 'true',
+				include_conversation_info: 'true',
+				dm_users: 'true',
+			});
+			const res = await signedFetch(client, url);
+			if (!res.ok) throw Object.assign(new Error(`Couldn’t load earlier messages (HTTP ${res.status})`), { status: res.status });
+			const timeline = (await res.json())?.conversation_timeline || {};
+			for (const user of Object.values(timeline.users || {})) rememberLegacyUser(user);
+			const messages = (timeline.entries || [])
+				.map((entry) => entry.message)
+				.filter((m) => m?.message_data && isNewer(before, m.id))
+				.map(serializeRestMessage)
+				.sort(byTime);
+			const more = timeline.status === 'HAS_MORE' && timeline.min_entry_id && timeline.min_entry_id !== String(before);
+			const users = await lookupUsers(client, messages.map((m) => m.senderId));
+			return { messages, cursor: more ? String(timeline.min_entry_id) : '', users };
+		},
+
 		// Delete a conversation from your inbox (the other people in it keep their copy). { id } -> { ok }
 		'dm.deleteConversation': async ({ id }) => {
 			if (!id) throw new Error('Missing conversation id');
 			if (demoMode) return { ok: true };
-			await requireClient().dm.deleteConversation(String(id));
+			// rettiwt posts to dm/<id>/delete.json, which X answers with 404; x.com uses this one.
+			const url = `https://x.com/i/api/1.1/dm/conversation/${encodeURIComponent(String(id))}/delete.json`;
+			const res = await signedFetch(requireClient(), url, {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({ dm_secret_conversations_enabled: 'false', krs_registration_enabled: 'false', include_groups: 'true' }).toString(),
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => ({}));
+				const reason = body.errors?.[0]?.message || `HTTP ${res.status}`;
+				throw Object.assign(new Error(`X did not delete the conversation (${reason})`), { status: res.status });
+			}
 			return { ok: true };
 		},
 

@@ -8,6 +8,8 @@ from perch.paged_list import PagedListView
 
 ENCRYPTED_TEXT = "Encrypted message — open X to read it"
 UNKNOWN_TEXT = "Message Perch can’t show — open X to see it"
+# Conversations with at least this many messages offer "Load Earlier Messages".
+OLDER_THRESHOLD = 20
 
 
 def _set_avatar(avatar: Adw.Avatar, url: str | None) -> None:
@@ -223,7 +225,7 @@ class ConversationPage(Adw.NavigationPage):
         more.insert_action_group("conversation", actions)
         header.pack_end(more)
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh")
-        refresh.connect("clicked", lambda *_: self.reload())
+        refresh.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))
         header.pack_end(refresh)
         if other and other.get("userName") and other.get("id") != controller.me_id:
             profile = Gtk.Button(icon_name="avatar-default-symbolic", tooltip_text=f"View @{other['userName']}’s Profile")
@@ -237,7 +239,18 @@ class ConversationPage(Adw.NavigationPage):
 
         self._list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self._list.add_css_class("bubble-list")
-        clamp = Adw.Clamp(maximum_size=720, child=self._list)
+        # Above the messages: load older history (X's first page only covers the newest ~200).
+        self._older = Gtk.Stack(hhomogeneous=False, vhomogeneous=False, margin_top=8, visible=False)
+        older_button = Gtk.Button(label="Load Earlier Messages", halign=Gtk.Align.CENTER, css_classes=["pill", "small-pill"])
+        older_button.connect("clicked", lambda *_: self._load_older())
+        self._older.add_named(older_button, "button")
+        self._older.add_named(Adw.Spinner(halign=Gtk.Align.CENTER, width_request=24, height_request=24), "loading")
+        self._older.add_named(Gtk.Label(label="Start of the conversation", css_classes=["dim-label", "caption"]), "start")
+        self._older_before: str | None = None  # id to page back from
+        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        column.append(self._older)
+        column.append(self._list)
+        clamp = Adw.Clamp(maximum_size=720, child=column)
         self._scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, child=clamp, vexpand=True)
         self._stack.add_named(self._scroller, "messages")
 
@@ -280,8 +293,55 @@ class ConversationPage(Adw.NavigationPage):
         self._stack.set_visible_child_name("messages")
         if added:
             self._scroll_to_bottom()
+        if self._older_before is None and (messages := result.get("messages") or []):
+            # Offer older history for a long conversation; a short one is all there is.
+            numeric = [m["id"] for m in messages if str(m.get("id", "")).isdigit()]
+            self._older_before = min(numeric, key=int) if numeric else messages[0]["id"]
+            if len(messages) >= OLDER_THRESHOLD:
+                self._older.set_visible(True)
+                self._older.set_visible_child_name("button")
         self._entry.grab_focus()
         self._mark_read(result.get("messages") or [])
+
+    def _load_older(self) -> None:
+        if not self._older_before:
+            return
+        self._older.set_visible_child_name("loading")
+
+        def done(result, error):
+            if error:
+                self._older.set_visible_child_name("button")
+                self._controller.report_error(error, "Couldn't load earlier messages")
+                return
+            self._users.update(result.get("users") or {})
+            older = [m for m in result.get("messages") or [] if m["id"] not in self._message_ids]
+            self._prepend(older)
+            self._older_before = result.get("cursor") or None
+            self._older.set_visible_child_name("button" if self._older_before else "start")
+
+        self._controller.sidecar.call("dm.older", {"id": self.conversation_id, "before": self._older_before}, done)
+
+    def _prepend(self, messages: list[dict]) -> None:
+        """Insert older messages (oldest first) above the current ones, keeping the view where it is."""
+        if not messages:
+            return
+        adjustment = self._scroller.get_vadjustment()
+        from_bottom = adjustment.get_upper() - adjustment.get_value()
+        previous = None
+        for index, message in enumerate(messages):
+            self._message_ids.add(message["id"])
+            sender_id = message.get("senderId")
+            mine = sender_id == self._controller.me_id
+            show_sender = self._is_group and not mine and sender_id != previous
+            self._list.insert(_Bubble(message, mine, self._users.get(sender_id), show_sender, on_link=self._controller.open_link), index)
+            previous = sender_id
+
+        def keep_place():
+            adjustment.set_value(adjustment.get_upper() - from_bottom)
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(keep_place)
+        GLib.timeout_add(150, keep_place)  # again after the new bubbles have been measured
 
     def _mark_read(self, messages: list[dict]) -> None:
         """Tell X the conversation is read up to its newest event, so it stays read everywhere.

@@ -18,8 +18,9 @@ GTK4 + libadwaita UI (Python)  ⇄  JSON lines over stdio  ⇄  Node sidecar (re
   `space.details`, `space.stream`, …) + offline demo fixtures.
 - DMs: inbox + conversation via rettiwt; sending via the web client's `dm/new2.json` (rettiwt has no
   send). Encrypted XChat messages show as a placeholder (decrypting needs the chat PIN + X's
-  chat-xdk, not bundled). Only the newest page (~150 messages) of a conversation loads, and reading
-  in Perch marks the conversation read on X (sends a read receipt if you have them enabled).
+  chat-xdk, not bundled). A conversation opens with its newest ~200 messages; "Load Earlier
+  Messages" pages back through X's REST history (`dm/conversation/<id>.json`). Reading in Perch
+  marks the conversation read on X (sends a read receipt if you have them enabled).
 - Spaces: details come from rettiwt; the HLS audio URL comes from `live_video_stream/status` (signed
   with rettiwt's credential helpers + a browser user agent — X returns 404 otherwise) and plays through
   GStreamer `playbin3` (`perch/spaces.py`). Open one from a tweet's Space card or menu → Open Space….
@@ -43,6 +44,16 @@ never log out of. It is stored with libsecret (Secret portal inside Flatpak).
 
 Treat the key like a password: it is full access to the account. Using it is against X's terms; the
 account can be rate limited or locked.
+
+## Caching
+
+The sidecar keeps read results in memory for a short while (about a minute for timelines, profiles
+and posts; 15 s for DMs and notifications; longer for older pages), so moving around the app doesn't
+refetch from X. Refresh (Ctrl+R / F5, the refresh buttons, Try Again) and the 2-minute poller always
+ask X. Your own likes, reposts and bookmarks are applied to cached copies; other writes drop the
+cached results they affect. If X rate limits or the network is down, Perch shows its last copy (up to
+30 minutes old) and says so. Nothing is cached on disk. Rules and tests: `sidecar/src/cache.js`,
+`npm --prefix sidecar test`.
 
 ## Development
 

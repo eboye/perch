@@ -32,8 +32,8 @@ class Poller:
 
     def _tick(self) -> bool:
         sidecar = self._window.sidecar
-        sidecar.call("notifications", {}, self._on_notifications)
-        sidecar.call("dm.inbox", {"meId": self._window.me_id}, self._on_inbox)
+        sidecar.call("notifications", {"fresh": True}, self._on_notifications)
+        sidecar.call("dm.inbox", {"meId": self._window.me_id, "fresh": True}, self._on_inbox)
         return GLib.SOURCE_CONTINUE
 
     # -- notifications ------------------------------------------------------

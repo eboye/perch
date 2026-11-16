@@ -46,7 +46,7 @@ class BookmarksPage(Adw.NavigationPage):
 
         headerbar = Adw.HeaderBar()
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh (Ctrl+R)")
-        refresh.connect("clicked", lambda *_: self.reload())
+        refresh.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))
         headerbar.pack_end(refresh)
 
         self._toolbar = Adw.ToolbarView(content=self._view)
@@ -141,7 +141,7 @@ class ListsPage(Adw.NavigationPage):
         new.connect("clicked", lambda *_: ListEditorDialog(controller, None, on_saved=lambda _l: self.reload()).present(self))
         headerbar.pack_start(new)
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh (Ctrl+R)")
-        refresh.connect("clicked", lambda *_: self.reload())
+        refresh.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))
         headerbar.pack_end(refresh)
 
         view = Adw.ToolbarView(content=self._view)
@@ -225,7 +225,7 @@ class ListPage(Adw.NavigationPage):
         self._title = Adw.WindowTitle(title=lst.get("name") or "List", subtitle=list_subtitle(lst))
         headerbar = Adw.HeaderBar(title_widget=self._title)
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh (Ctrl+R)")
-        refresh.connect("clicked", lambda *_: self.reload())
+        refresh.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))
         headerbar.pack_end(refresh)
         self._edit = Gtk.Button(icon_name="document-edit-symbolic", tooltip_text="Edit List")
         self._edit.connect("clicked", lambda *_: ListEditorDialog(controller, self.list, on_saved=self._on_saved).present(self))
