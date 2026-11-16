@@ -245,14 +245,58 @@ const methods = {
 		return { ok: true };
 	},
 
-	// { text, replyTo?, quote?, mediaPaths?: string[] } -> { id }
-	'tweet.post': async ({ text, replyTo, quote, mediaPaths }) => {
-		const paths = (mediaPaths || []).slice(0, 4);
-		if (!text?.trim() && paths.length === 0) throw new Error('Nothing to post');
+	// Delete one of your own posts. { id } -> { ok }
+	'tweet.delete': async ({ id }) => {
+		if (!id) throw new Error('Missing tweet id');
+		if (demoMode) return { ok: true };
+		const ok = await requireClient().tweet.unpost(String(id));
+		if (!ok) throw new Error('X did not confirm the deletion');
+		return { ok: true };
+	},
+
+	// Who liked / reposted a post. { id, kind: 'likers'|'retweeters', cursor? } -> { list: users, next }
+	'tweet.engagers': async ({ id, kind, cursor }) => {
+		if (!id) throw new Error('Missing tweet id');
+		if (demoMode) return demo.searchUsers(kind || '', cursor);
+		const tweets = requireClient().tweet;
+		const fetcher = kind === 'retweeters' ? tweets.retweeters : tweets.likers;
+		const data = await fetcher.call(tweets, String(id), 40, cursor || undefined);
+		return { list: data.list.map(serializeUser), next: data.next };
+	},
+
+	// Every version of an edited post, newest first. { id } -> { list }
+	'tweet.history': async ({ id }) => {
+		if (!id) throw new Error('Missing tweet id');
+		if (demoMode) return demo.history(id);
+		const versions = await requireClient().tweet.history(String(id));
+		const list = versions.map(serializeTweet).sort((a, b) => compareIds(b.id, a.id));
+		return { list, next: '' };
+	},
+
+	// A user's followers / the accounts they follow. { id, kind: 'followers'|'following', cursor? }
+	'user.connections': async ({ id, kind, cursor }) => {
+		if (!id) throw new Error('Missing user id');
+		if (demoMode) return demo.searchUsers(kind || '', cursor);
+		const users = requireClient().user;
+		const fetcher = kind === 'following' ? users.following : users.followers;
+		const data = await fetcher.call(users, String(id), 40, cursor || undefined);
+		return { list: data.list.map(serializeUser), next: data.next };
+	},
+
+	// { text, replyTo?, quote?, media?: [{ path, alt? }] (or legacy mediaPaths: string[]) } -> { id }
+	'tweet.post': async ({ text, replyTo, quote, media: attachments, mediaPaths }) => {
+		const items = (attachments || (mediaPaths || []).map((path) => ({ path }))).filter((m) => m?.path).slice(0, 4);
+		if (!text?.trim() && items.length === 0) throw new Error('Nothing to post');
 		if (demoMode) return { id: String(Date.now()) };
 		const tweets = requireClient().tweet;
 		const media = [];
-		for (const path of paths) media.push({ id: await tweets.upload(path) });
+		for (const item of items) {
+			const mediaId = await tweets.upload(item.path);
+			// Alt text has to be attached after the upload and before the post.
+			const alt = String(item.alt || '').trim().slice(0, MAX_ALT_TEXT);
+			if (alt) await tweets.setMediaMetadata(mediaId, { altText: alt });
+			media.push({ id: mediaId });
+		}
 		const id = await tweets.post({
 			text: text || undefined,
 			replyTo: replyTo || undefined,
@@ -283,6 +327,14 @@ const methods = {
 };
 
 const TWEET_ACTIONS = new Set(['like', 'unlike', 'retweet', 'unretweet', 'bookmark', 'unbookmark']);
+const MAX_ALT_TEXT = 1000; // X's limit for image descriptions
+
+// Snowflake ids are too big for Number; compare them as decimal strings.
+function compareIds(a, b) {
+	const x = String(a);
+	const y = String(b);
+	return x.length - y.length || (x < y ? -1 : x > y ? 1 : 0);
+}
 
 // User flags in rettiwt are named from the other side (isFollowed = you follow them); expose plain
 // names, plus the website link and protected state from the raw payload.
@@ -356,6 +408,11 @@ function serializeTweet(tweet) {
 	out.liked = Boolean(legacy.favorited);
 	out.retweeted = Boolean(legacy.retweeted);
 	out.bookmarked = Boolean(legacy.bookmarked);
+	// Every version's id (the original first); a plain post has one. X puts them at the top level for
+	// unedited posts and under `edit_control_initial` once a post has been edited.
+	const control = tweet.raw?.edit_control || {};
+	const editIds = control.edit_tweet_ids || control.edit_control_initial?.edit_tweet_ids || [];
+	out.edited = editIds.length > 1;
 	pickVideoVariants(out, legacy);
 	if (tweet.quoted) out.quoted = serializeTweet(tweet.quoted);
 	if (tweet.retweetedTweet) out.retweetedTweet = serializeTweet(tweet.retweetedTweet);

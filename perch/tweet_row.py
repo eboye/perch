@@ -1,6 +1,6 @@
 """Widget that renders one tweet (or repost) from the sidecar's plain-JSON Tweet."""
 
-from gi.repository import Adw, Gdk, Gtk, Pango
+from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
 from perch import format as fmt
 from perch import images
@@ -31,7 +31,37 @@ def link_to_profile(widget: Gtk.Widget, user: dict, controller) -> None:
     widget.set_tooltip_text(f"View @{user['userName']}’s profile")
 
 
-def _header(user: dict, created_at: str | None, controller=None) -> Gtk.Box:
+def _post_menu(tweet: dict, controller, on_deleted) -> Gtk.MenuButton:
+    """The ⋯ button on a post: copy its link, open it in the browser, delete it (your own posts)."""
+    # The button sits at the row's right edge: align the popover's end with it so it opens
+    # leftwards instead of running off the window.
+    popover = Gtk.Popover(has_arrow=True, halign=Gtk.Align.END)
+    popover.add_css_class("menu")
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+    def item(label: str, callback, destructive: bool = False) -> None:
+        button = Gtk.Button(label=label, has_frame=False)
+        button.get_child().set_xalign(0)
+        if destructive:
+            button.add_css_class("error")
+        button.connect("clicked", lambda *_: (popover.popdown(), callback()))
+        box.append(button)
+
+    url = tweet.get("url")
+    if url:
+        item("Copy Link", lambda: (Gdk.Display.get_default().get_clipboard().set(url), controller.toast("Link copied")))
+        item("Open in Browser", lambda: Gtk.UriLauncher(uri=url).launch(menu.get_root(), None, None, None))
+    if (tweet.get("tweetBy") or {}).get("id") == controller.me_id:
+        item("Delete Post…", lambda: controller.delete_post(tweet, on_deleted), destructive=True)
+    popover.set_child(box)
+
+    menu = Gtk.MenuButton(icon_name="view-more-symbolic", popover=popover, tooltip_text="More", valign=Gtk.Align.CENTER)
+    menu.add_css_class("flat")
+    menu.add_css_class("post-menu")
+    return menu
+
+
+def _header(user: dict, created_at: str | None, controller=None, edited: bool = False, menu: Gtk.Widget | None = None) -> Gtk.Box:
     box = Gtk.Box(spacing=4)
     who = Gtk.Box(spacing=4)  # name + badge + handle: one click target for the profile
     name = _label(user.get("fullName") or user.get("userName") or "?", "heading", ellipsize=Pango.EllipsizeMode.END)
@@ -50,6 +80,12 @@ def _header(user: dict, created_at: str | None, controller=None) -> Gtk.Box:
     when = _label(fmt.relative_time(created_at), "dim-label", "numeric")
     when.set_tooltip_text(fmt.full_time(created_at))
     box.append(when)
+    if edited:
+        marker = _label("· Edited", "dim-label", "edited-marker")
+        marker.set_tooltip_text("This post was edited")
+        box.append(marker)
+    if menu is not None:
+        box.append(menu)
     return box
 
 
@@ -379,25 +415,58 @@ def quoted_card(tweet: dict, controller=None) -> Gtk.Box:
     return card
 
 
-def _detail_stats(tweet: dict) -> Gtk.Widget:
-    """Full date and the complete counts, as on a post's own page."""
+# Detail-page counts; the ones with a sidecar `tweet.engagers` kind open the list of those people.
+_DETAIL_COUNTS = (
+    ("retweetCount", "Repost", "Reposts", "retweeters"),
+    ("quoteCount", "Quote", "Quotes", None),
+    ("likeCount", "Like", "Likes", "likers"),
+    ("bookmarkCount", "Bookmark", "Bookmarks", None),
+    ("viewCount", "View", "Views", None),
+)
+
+
+def _detail_stats(tweet: dict, controller=None) -> Gtk.Widget:
+    """Full date and the complete counts, as on a post's own page. Reposts / Likes open who did
+    it; "Edited" opens the edit history."""
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=4)
-    box.append(_label(fmt.full_time(tweet.get("createdAt")), "dim-label"))
+    when = Gtk.Label(xalign=0, use_markup=True, css_classes=["dim-label", "detail-stats"])
+    when_markup = GLib.markup_escape_text(fmt.full_time(tweet.get("createdAt")))
+    if tweet.get("edited"):
+        when_markup += '   ·   <a href="perch:history" title="Show earlier versions">Edited — view history</a>'
+    when.set_markup(when_markup)
+    box.append(when)
     parts = []
-    for key, singular, plural in (
-        ("retweetCount", "Repost", "Reposts"),
-        ("quoteCount", "Quote", "Quotes"),
-        ("likeCount", "Like", "Likes"),
-        ("bookmarkCount", "Bookmark", "Bookmarks"),
-        ("viewCount", "View", "Views"),
-    ):
+    # X keeps likes private: only a post's author can see who liked it.
+    mine = controller is not None and (tweet.get("tweetBy") or {}).get("id") == getattr(controller, "me_id", None)
+    for key, singular, plural, kind in _DETAIL_COUNTS:
         count = tweet.get(key) or 0
-        if count:
-            parts.append(f"<b>{count:,}</b> {singular if count == 1 else plural}")
+        if not count:
+            continue
+        text = f"<b>{count:,}</b> {singular if count == 1 else plural}"
+        if kind == "likers" and not mine:
+            kind = None
+        if kind and controller is not None:
+            text = f'<a href="perch:{kind}" title="See who">{text}</a>'
+        parts.append(text)
+    stats = None
     if parts:
         stats = _label("", "detail-stats", wrap=True, use_markup=True)
         stats.set_markup("   ".join(parts))
         box.append(stats)
+
+    def on_link(_label, uri: str) -> bool:
+        if controller is None or not uri.startswith("perch:"):
+            return False
+        kind = uri.removeprefix("perch:")
+        if kind == "history":
+            controller.open_edit_history(tweet)
+        else:
+            controller.open_engagers(tweet, kind)
+        return True
+
+    for label in (when, stats):
+        if label is not None:
+            label.connect("activate-link", on_link)
     return box
 
 
@@ -471,7 +540,8 @@ class TweetRow(Gtk.ListBoxRow):
         row.append(avatar)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
-        content.append(_header(user, shown.get("createdAt"), controller))
+        menu = _post_menu(shown, controller, self._on_deleted) if hasattr(controller, "delete_post") else None
+        content.append(_header(user, shown.get("createdAt"), controller, edited=bool(shown.get("edited")), menu=menu))
         if body := _body(shown, controller):
             content.append(body)
         if media := _media(shown.get("media"), controller, shown.get("url")):
@@ -481,8 +551,12 @@ class TweetRow(Gtk.ListBoxRow):
         if shown.get("quoted"):
             content.append(_clickable_quote(quoted_card(shown["quoted"], controller), shown["quoted"], controller))
         if detailed:
-            content.append(_detail_stats(shown))
+            content.append(_detail_stats(shown, controller))
         content.append(ActionBar(shown, controller))
         row.append(content)
         outer.append(row)
         self.set_child(outer)
+
+    def _on_deleted(self) -> None:
+        """The post is gone on X: drop it from this list (the repost wrapper too)."""
+        self.set_visible(False)

@@ -6,6 +6,8 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from perch import APP_ID, APP_NAME, keyring, settings
 from perch.compose import ComposeDialog
+from perch.edit_history import EditHistoryPage
+from perch.people import PeoplePage
 from perch.media_viewer import MediaViewer
 from perch.messages import ConversationPage, InboxView
 from perch.notifications import NotificationsView
@@ -312,6 +314,65 @@ class PerchWindow(Adw.ApplicationWindow):
     def open_list(self, lst: dict) -> None:
         self._push_unique(f"list-{lst['id']}", lambda: ListPage(self, lst))
 
+    def open_connections(self, user: dict, kind: str) -> None:
+        """A profile's followers (``kind='followers'``) or the accounts it follows (``'following'``)."""
+        if not user.get("id"):
+            return
+        title = "Followers" if kind == "followers" else "Following"
+        handle = user.get("userName", "")
+        empty = "No followers yet" if kind == "followers" else "Not following anyone yet"
+        self._push_unique(
+            f"{kind}-{user['id']}",
+            lambda: PeoplePage(self, f"{kind}-{user['id']}", title, f"@{handle}", "user.connections", {"id": user["id"], "kind": kind}, empty),
+        )
+
+    def open_engagers(self, tweet: dict, kind: str) -> None:
+        """Who liked (``kind='likers'``) or reposted (``'retweeters'``) a post."""
+        if not tweet.get("id"):
+            return
+        title = "Liked by" if kind == "likers" else "Reposted by"
+        handle = (tweet.get("tweetBy") or {}).get("userName", "")
+        empty = "No likes yet" if kind == "likers" else "No reposts yet"
+        self._push_unique(
+            f"{kind}-{tweet['id']}",
+            lambda: PeoplePage(self, f"{kind}-{tweet['id']}", title, f"Post by @{handle}", "tweet.engagers", {"id": tweet["id"], "kind": kind}, empty),
+        )
+
+    def open_edit_history(self, tweet: dict) -> None:
+        if tweet.get("id"):
+            self._push_unique(f"history-{tweet['id']}", lambda: EditHistoryPage(self, tweet))
+
+    def delete_post(self, tweet: dict, on_deleted=None) -> None:
+        """Confirm, then delete one of your own posts on X."""
+        if not self._signed_in() or not tweet.get("id"):
+            return
+        dialog = Adw.AlertDialog(heading="Delete post?", body="It will be removed from your profile, the timelines of anyone following you, and search. This can't be undone.")
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def done(_result, error):
+            if error:
+                self.report_error(error, "Couldn't delete the post")
+                return
+            if on_deleted:
+                on_deleted()
+            # Leave the deleted post's own page (and anything opened from it).
+            tag = f"post-{tweet['id']}"
+            if self._nav.find_page(tag) is not None:
+                self._nav.pop_to_tag(tag)
+                self._nav.pop()
+            self.toast("Post deleted")
+
+        def on_response(_dialog, response):
+            if response == "delete":
+                self._sidecar.call("tweet.delete", {"id": tweet["id"]}, done)
+
+        dialog.connect("response", on_response)
+        dialog.present(self)
+
     def add_to_list(self, user: dict) -> None:
         if self._signed_in() and user.get("id"):
             AddToListDialog(self, user).present(self)
@@ -490,7 +551,7 @@ class PerchWindow(Adw.ApplicationWindow):
         if not self._signed_in():
             return
         page = self._nav.get_visible_page()
-        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage)):
+        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage, PeoplePage, EditHistoryPage)):
             page.reload()
             return
         view = self._views[self._current_tab()]

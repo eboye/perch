@@ -9,6 +9,7 @@ from perch.tweet_row import quoted_card
 
 MAX_CHARS = 280
 MAX_IMAGES = 4
+MAX_ALT_CHARS = 1000  # X's limit for an image description
 
 
 class ComposeDialog(Adw.Dialog):
@@ -19,6 +20,7 @@ class ComposeDialog(Adw.Dialog):
         self._reply_to = reply_to
         self._quote = quote
         self._images: list[str] = []
+        self._alts: dict[str, str] = {}  # image path -> description (alt text)
 
         header = Adw.HeaderBar(show_end_title_buttons=False, show_start_title_buttons=False)
         cancel = Gtk.Button(label="Cancel")
@@ -82,7 +84,8 @@ class ComposeDialog(Adw.Dialog):
         view.add_top_bar(header)
         self.set_child(view)
 
-        send = Gtk.ShortcutController()
+        # Capture phase: the text view would otherwise take Ctrl+Return before it bubbles up here.
+        send = Gtk.ShortcutController(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         send.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string("<Control>Return"), Gtk.CallbackAction.new(lambda *_: self._submit() or True)))
         self.add_controller(send)
         self.set_focus(self._text)
@@ -140,11 +143,63 @@ class ComposeDialog(Adw.Dialog):
             remove = Gtk.Button(icon_name="window-close-symbolic", halign=Gtk.Align.END, valign=Gtk.Align.START, margin_top=4, margin_end=4, tooltip_text="Remove")
             remove.add_css_class("osd")
             remove.add_css_class("circular")
-            remove.connect("clicked", lambda *_, p=path: (self._images.remove(p), self._render_thumbs()))
+            remove.connect("clicked", lambda *_, p=path: (self._images.remove(p), self._alts.pop(p, None), self._render_thumbs()))
+            alt = Gtk.Button(label="ALT", halign=Gtk.Align.START, valign=Gtk.Align.END, margin_start=4, margin_bottom=4)
+            alt.set_tooltip_text("Edit description" if self._alts.get(path) else "Add a description (alt text)")
+            for css in ("osd", "alt-badge"):
+                alt.add_css_class(css)
+            if self._alts.get(path):
+                alt.add_css_class("has-alt")
+            alt.connect("clicked", lambda *_, p=path: self._edit_alt(p))
             overlay = Gtk.Overlay(child=picture)
             overlay.add_overlay(remove)
+            overlay.add_overlay(alt)
             self._thumbs.append(overlay)
         self._update_state()
+
+    def _edit_alt(self, path: str) -> None:
+        """Describe an image for people who use screen readers (X's "alt text")."""
+        buffer = Gtk.TextBuffer(text=self._alts.get(path, ""))
+        text = Gtk.TextView(buffer=buffer, wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False, top_margin=8, bottom_margin=8, left_margin=8, right_margin=8)
+        text.add_css_class("compose-text")
+        scroller = Gtk.ScrolledWindow(child=text, min_content_height=120, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroller.add_css_class("card")
+        counter = Gtk.Label(xalign=1, css_classes=["numeric", "dim-label", "caption"])
+        extra = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        extra.append(scroller)
+        extra.append(counter)
+
+        dialog = Adw.AlertDialog(heading="Image Description", body=f"Describe {Path(path).name} for people who can't see it.", extra_child=extra)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("save", "Save")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+
+        def current() -> str:
+            return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
+
+        def sync(*_):
+            used = len(current())
+            counter.set_label(f"{used}/{MAX_ALT_CHARS}")
+            (counter.add_css_class if used > MAX_ALT_CHARS else counter.remove_css_class)("error")
+            dialog.set_response_enabled("save", used <= MAX_ALT_CHARS)
+
+        def on_response(_dialog, response):
+            if response != "save":
+                return
+            value = current().strip()
+            if value:
+                self._alts[path] = value
+            else:
+                self._alts.pop(path, None)
+            self._render_thumbs()
+
+        buffer.connect("changed", sync)
+        sync()
+        dialog.connect("response", on_response)
+        dialog.present(self)
+        text.grab_focus()
 
     # -- submit -------------------------------------------------------------
 
@@ -162,7 +217,7 @@ class ComposeDialog(Adw.Dialog):
             "text": self._get_text().strip(),
             "replyTo": (self._reply_to or {}).get("id"),
             "quote": (self._quote or {}).get("id"),
-            "mediaPaths": list(self._images),
+            "media": [{"path": path, "alt": self._alts.get(path, "")} for path in self._images],
         }
 
         def done(result, error):

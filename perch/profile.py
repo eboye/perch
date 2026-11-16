@@ -10,6 +10,15 @@ from perch.tweet_row import TweetRow
 TABS = (("posts", "Posts"), ("replies", "Replies"), ("media", "Media"))
 
 
+def _counts_markup(user: dict) -> str:
+    """Following / Followers (links to those lists) and the post count."""
+    return (
+        f'<a href="perch:following" title="See who they follow"><b>{user.get("followingsCount") or 0:,}</b> Following</a>    '
+        f'<a href="perch:followers" title="See their followers"><b>{user.get("followersCount") or 0:,}</b> Followers</a>    '
+        f"<b>{user.get('statusesCount') or 0:,}</b> Posts"
+    )
+
+
 class _ProfilePostsView(PagedListView):
     error_title = "Couldn't load posts"
     end_label = "No more posts"
@@ -175,16 +184,19 @@ class ProfilePage(Adw.NavigationPage):
         info.append(meta)
 
         counts = Gtk.Label(xalign=0, use_markup=True, margin_top=2)
-        counts.set_markup(
-            f"<b>{user.get('followingsCount') or 0:,}</b> Following    "
-            f"<b>{user.get('followersCount') or 0:,}</b> Followers    "
-            f"<b>{user.get('statusesCount') or 0:,}</b> Posts"
-        )
+        counts.set_markup(_counts_markup(user))
         counts.add_css_class("profile-counts")
+        counts.connect("activate-link", self._on_count_link)
         self._counts = counts
         info.append(counts)
         card.append(info)
         return card
+
+    def _on_count_link(self, _label, uri: str) -> bool:
+        if uri.startswith("perch:") and self.user:
+            self._controller.open_connections(self.user, uri.removeprefix("perch:"))
+            return True
+        return False
 
     def _meta_item(self, icon: str, markup: str) -> Gtk.Widget:
         box = Gtk.Box(spacing=4, css_classes=["dim-label"])
@@ -239,9 +251,7 @@ class ProfilePage(Adw.NavigationPage):
         def apply(following: bool, count: int) -> None:
             user["youFollow"], user["followersCount"] = following, count
             self._sync_follow_button(button, following)
-            self._counts.set_markup(
-                f"<b>{user.get('followingsCount') or 0:,}</b> Following    <b>{count:,}</b> Followers    <b>{user.get('statusesCount') or 0:,}</b> Posts"
-            )
+            self._counts.set_markup(_counts_markup(user))
 
         apply(follow, max(0, before_count + (1 if follow else -1)))  # optimistic
         button.set_sensitive(False)

@@ -61,6 +61,7 @@ function tweet(n, kind, nested = false) {
 		retweeted: n % 7 === 2,
 		bookmarked: n % 8 === 5,
 	};
+	if (n % 11 === 2) t.edited = true;
 	if (n % 9 === 6) {
 		t.fullText = 'Going live in a Space about GTK app design — come hang out https://t.co/demoSpace';
 		t.entities.urls = ['https://x.com/i/spaces/1DemoSpaceAbc'];
@@ -258,8 +259,17 @@ function lists() {
 	};
 }
 
+// Edit history of a post: the current text plus two earlier drafts, newest first.
+function history(id) {
+	const base = details(id);
+	const texts = [base.fullText, `${base.fullText} (first draft, with a typo fixed later)`, `${base.fullText} teh original`];
+	const list = texts.map((fullText, i) => ({ ...base, id: String(BigInt(base.id) - BigInt(i)), fullText, createdAt: stamp(5 + i * 12), edited: true }));
+	return { list, next: '' };
+}
+
 module.exports = {
 	bookmarks,
+	history,
 	lists,
 	searchPosts,
 	searchUsers,

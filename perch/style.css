@@ -213,6 +213,34 @@
   margin-bottom: 2px;
 }
 
+/* Counts that open a people list (followers, likes …) read as plain text, not as blue links. */
+.profile-counts link,
+.detail-stats link {
+  color: inherit;
+}
+
+.edited-marker {
+  font-size: 0.9em;
+}
+
+.version-label {
+  font-size: 0.85em;
+  margin-bottom: 4px;
+}
+
+.alt-badge {
+  font-size: 0.75em;
+  font-weight: bold;
+  padding: 1px 6px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.alt-badge.has-alt {
+  background: var(--accent-bg-color);
+  color: var(--accent-fg-color);
+}
+
 .media-gallery {
   border-radius: 12px;
 }

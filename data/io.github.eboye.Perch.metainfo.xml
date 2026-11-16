@@ -22,6 +22,7 @@
   <launchable type="desktop-id">io.github.eboye.Perch.desktop</launchable>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-11-16"/>
     <release version="0.2.9" date="2026-11-15"/>
     <release version="0.2.8" date="2026-11-15"/>
     <release version="0.2.7" date="2026-11-15"/>
