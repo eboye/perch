@@ -57,6 +57,8 @@ def _post_menu(tweet: dict, controller, on_deleted) -> Gtk.MenuButton:
         item("Delete Post…", lambda: controller.delete_post(tweet, on_deleted), destructive=True)
     elif author.get("id") and author.get("userName") and hasattr(controller, "set_muted"):
         item(f"Mute @{author['userName']}", lambda: controller.set_muted(author, True))
+        if hasattr(controller, "set_blocked"):
+            item(f"Block @{author['userName']}…", lambda: controller.set_blocked(author, True), destructive=True)
     popover.set_child(box)
 
     menu = Gtk.MenuButton(icon_name="view-more-symbolic", popover=popover, tooltip_text="More", valign=Gtk.Align.CENTER)
@@ -359,6 +361,9 @@ class ActionBar(Gtk.Box):
         self._like.set_tooltip_text("Unlike" if t.get("liked") else "Like")
         self._bookmark.set_tooltip_text("Remove Bookmark" if t.get("bookmarked") else "Bookmark")
 
+    def toggle_like(self) -> None:
+        self._toggle("liked", "likeCount", "like", "unlike")
+
     def _toggle(self, flag: str, count_key: str, on_action: str, off_action: str) -> None:
         if flag in self._busy:
             return
@@ -558,7 +563,8 @@ class TweetRow(Gtk.ListBoxRow):
             content.append(_clickable_quote(quoted_card(shown["quoted"], controller), shown["quoted"], controller))
         if detailed:
             content.append(_detail_stats(shown, controller))
-        content.append(ActionBar(shown, controller))
+        self.actions = ActionBar(shown, controller)
+        content.append(self.actions)
         row.append(content)
         outer.append(row)
         self.set_child(outer)

@@ -5,6 +5,8 @@
 // cannot send DMs; sending uses the web client's dm/new2.json endpoint via signedFetch.
 
 const { randomUUID } = require('node:crypto');
+const { readFileSync, statSync } = require('node:fs');
+const { basename, extname } = require('node:path');
 const { ResourceType } = require('rettiwt-api/dist/enums/Resource');
 const { Extractors } = require('rettiwt-api/dist/collections/Extractors');
 const { signedFetch } = require('./xhttp');
@@ -67,6 +69,47 @@ function serializeMessage(message) {
 }
 
 const byTime = (a, b) => new Date(a.createdAt) - new Date(b.createdAt);
+
+// DM images: X's limits for a photo in a message.
+const DM_IMAGE_TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+const DM_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const UPLOAD_URL = 'https://upload.x.com/i/media/upload.json';
+
+function checkDmImage(path) {
+	const type = DM_IMAGE_TYPES[extname(String(path)).toLowerCase()];
+	if (!type) throw new Error('Pick a JPEG, PNG or WebP image');
+	let size;
+	try {
+		size = statSync(path).size;
+	} catch {
+		throw new Error('Couldn’t read the image file');
+	}
+	if (size > DM_IMAGE_MAX_BYTES) throw new Error('The image is larger than 5 MB');
+	return { type, size };
+}
+
+// Upload a photo for a DM (INIT / APPEND / FINALIZE with the dm_image category, as x.com does).
+// rettiwt's upload has no category, which X needs to attach media to a message. -> media id
+async function uploadDmImage(client, path) {
+	const { type, size } = checkDmImage(path);
+	const post = async (params, body) => {
+		const url = new URL(UPLOAD_URL);
+		url.search = new URLSearchParams(params);
+		const res = await signedFetch(client, url, { method: 'POST', body });
+		const text = await res.text();
+		if (!res.ok) throw Object.assign(new Error(`Image upload failed (HTTP ${res.status})`), { status: res.status });
+		return text ? JSON.parse(text) : {};
+	};
+	const init = await post({ command: 'INIT', total_bytes: String(size), media_type: type, media_category: 'dm_image' });
+	const id = init.media_id_string;
+	if (!id) throw new Error('X did not start the image upload');
+	const form = new FormData();
+	form.append('media', new Blob([readFileSync(path)], { type }), basename(path));
+	await post({ command: 'APPEND', media_id: id, segment_index: '0' }, form);
+	const done = await post({ command: 'FINALIZE', media_id: id });
+	if (done.processing_info?.state === 'failed') throw new Error('X could not process the image');
+	return id;
+}
 
 // A message from the REST conversation timeline, in serializeMessage's shape. t.co links are
 // expanded; a link that only stands for an attached photo/video is dropped (the media is listed).
@@ -278,12 +321,14 @@ function methods({ requireClient, demoMode }) {
 			return { ok: true };
 		},
 
-		// { conversationId, text } -> { id, createdAt }
-		'dm.send': async ({ conversationId, text }) => {
+		// { conversationId, text, mediaPath? } -> { id, createdAt }. One image per message (X's limit).
+		'dm.send': async ({ conversationId, text, mediaPath }) => {
 			if (!conversationId) throw new Error('Missing conversation id');
-			if (!text?.trim()) throw new Error('Message is empty');
+			if (!text?.trim() && !mediaPath) throw new Error('Message is empty');
+			if (mediaPath) checkDmImage(mediaPath);
 			if (demoMode) return { id: String(Date.now()), createdAt: new Date().toISOString() };
 			const client = requireClient();
+			const mediaId = mediaPath ? await uploadDmImage(client, mediaPath) : null;
 			const url = new URL('https://x.com/i/api/1.1/dm/new2.json');
 			url.search = new URLSearchParams({
 				ext: 'mediaColor,altText,mediaStats,highlightedLabel',
@@ -302,7 +347,8 @@ function methods({ requireClient, demoMode }) {
 					conversation_id: String(conversationId),
 					recipient_ids: false,
 					request_id: randomUUID(),
-					text,
+					text: text || '',
+					...(mediaId ? { media_id: mediaId } : {}),
 					cards_platform: 'Web-12',
 					include_cards: 1,
 					include_quote_count: true,
@@ -323,4 +369,4 @@ function methods({ requireClient, demoMode }) {
 	};
 }
 
-module.exports = { methods };
+module.exports = { methods, uploadDmImage };

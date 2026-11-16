@@ -169,10 +169,12 @@ class PerchWindow(Adw.ApplicationWindow):
             people = Gio.Menu()
             people.append("Who to Follow", "win.suggestions")
             people.append("Muted Accounts", "win.muted")
+            people.append("Blocked Accounts", "win.blocked")
             self._menu.append_section(None, people)
         actions = Gio.Menu()
         actions.append("Open Space…", "win.open-space")
         actions.append("Desktop Notifications", "win.desktop-notifications")
+        actions.append("Keyboard Shortcuts", "win.shortcuts")
         if not self._demo:
             actions.append("Sign Out", "win.sign-out")
         actions.append(f"About {APP_NAME}", "app.about")
@@ -220,6 +222,8 @@ class PerchWindow(Adw.ApplicationWindow):
             ("scheduled", lambda: self.open_scheduled()),
             ("suggestions", lambda: self.open_suggestions()),
             ("muted", lambda: self.open_muted()),
+            ("blocked", lambda: self.open_blocked()),
+            ("shortcuts", lambda: self._show_shortcuts()),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
@@ -238,6 +242,100 @@ class PerchWindow(Adw.ApplicationWindow):
         app.set_accels_for_action("win.refresh", ["<Control>r", "F5"])
         app.set_accels_for_action("win.compose", ["<Control>n"])
         app.set_accels_for_action("win.search", ["<Control>f"])
+        app.set_accels_for_action("win.shortcuts", ["<Control>question"])
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key)
+        self.add_controller(keys)
+
+    # -- keyboard navigation ------------------------------------------------
+
+    def _on_key(self, _controller, keyval: int, _keycode: int, state: Gdk.ModifierType) -> bool:
+        """j / k: next / previous item, l: like, r: reply. Enter (on the focused item) is the list's
+        own activation and Esc (back) the navigation view's. Ignored while typing or with a dialog open."""
+        if state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK | Gdk.ModifierType.SUPER_MASK):
+            return False
+        if not self._signed_in() or self.get_visible_dialog() is not None:
+            return False
+        if isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView)):
+            return False
+        key = Gdk.keyval_name(keyval)
+        if key not in ("j", "k", "l", "r"):
+            return False
+        view = self._current_list_view()
+        if view is None:
+            return False
+        rows = view.visible_rows()
+        if not rows:
+            return False
+        current = self._focused_row(view)
+        if key in ("j", "k"):
+            if current is None:
+                target = view.first_row_on_screen() or rows[0]
+            else:
+                index = rows.index(current) + (1 if key == "j" else -1)
+                if index >= len(rows):
+                    view.load_more()
+                    return True
+                target = rows[max(0, index)]
+            target.grab_focus()
+            view.scroll_to_row(target)
+            return True
+        row = current or view.first_row_on_screen()
+        actions = getattr(row, "actions", None)
+        if actions is None:
+            return False
+        if key == "l":
+            actions.toggle_like()
+        else:
+            self.compose(reply_to=row.tweet)
+        return True
+
+    def _current_list_view(self) -> PagedListView | None:
+        page = self._nav.get_visible_page()
+        if page.get_tag() == "home":
+            return self._views.get(self._current_tab())
+        stack = [page]
+        while stack:
+            widget = stack.pop(0)
+            if isinstance(widget, PagedListView) and widget.get_mapped():
+                return widget
+            child = widget.get_first_child()
+            while child is not None:
+                stack.append(child)
+                child = child.get_next_sibling()
+        return None
+
+    def _focused_row(self, view: PagedListView) -> Gtk.ListBoxRow | None:
+        widget = self.get_focus()
+        while widget is not None and not (isinstance(widget, Gtk.ListBoxRow) and widget.get_parent() is view.list_box):
+            widget = widget.get_parent()
+        return widget
+
+    def _show_shortcuts(self) -> None:
+        dialog = Adw.ShortcutsDialog()
+        lists = Adw.ShortcutsSection(title="Posts and Lists")
+        for title, accel in (
+            ("Next item", "j"),
+            ("Previous item", "k"),
+            ("Open the selected item", "Return"),
+            ("Like or unlike the selected post", "l"),
+            ("Reply to the selected post", "r"),
+            ("Go back", "Escape"),
+        ):
+            lists.add(Adw.ShortcutsItem(title=title, accelerator=accel))
+        general = Adw.ShortcutsSection(title="General")
+        for title, accel in (
+            ("New post", "<Control>n"),
+            ("Search", "<Control>f"),
+            ("Refresh", "<Control>r"),
+            ("Post (in the compose box)", "<Control>Return"),
+            ("Keyboard shortcuts", "<Control>question"),
+            ("Quit", "<Control>q"),
+        ):
+            general.add(Adw.ShortcutsItem(title=title, accelerator=accel))
+        dialog.add(lists)
+        dialog.add(general)
+        dialog.present(self)
 
     def _on_desktop_notifications_toggled(self, action: Gio.SimpleAction, value: GLib.Variant) -> None:
         action.set_state(value)
@@ -420,6 +518,51 @@ class PerchWindow(Adw.ApplicationWindow):
             self._toasts.add_toast(toast)
 
         self._sidecar.call("user.mute", {"id": user["id"], "mute": mute}, done)
+
+    def open_blocked(self) -> None:
+        self._push_unique(
+            "blocked",
+            lambda: PeoplePage(self, "blocked", "Blocked Accounts", "They can't follow you or see your posts", "user.blocked", {}, "You haven’t blocked anyone"),
+        )
+
+    def set_blocked(self, user: dict, block: bool) -> None:
+        """Block (after confirming) or unblock someone on X."""
+        if not self._signed_in() or not user.get("id"):
+            return
+        handle = user.get("userName", "")
+
+        def run():
+            def done(_result, error):
+                if error:
+                    self.report_error(error, f"Couldn't {'block' if block else 'unblock'} @{handle}")
+                    return
+                user["blocked"] = block
+                if block:
+                    user["youFollow"] = user["followsYou"] = False
+                    for name in ("following", "foryou", "notifications"):
+                        self._views[name].hide_rows(lambda row: user["id"] in getattr(row, "author_ids", ()))
+                for tag in ("blocked", f"profile-{handle.lower()}"):
+                    if (page := self._nav.find_page(tag)) is not None:
+                        page.reload()
+                self.toast(f"Blocked @{handle}" if block else f"Unblocked @{handle}")
+
+            self._sidecar.call("user.block", {"id": user["id"], "block": block}, done)
+
+        if not block:
+            run()
+            return
+        dialog = Adw.AlertDialog(
+            heading=f"Block @{handle}?",
+            body="They won't be able to follow you, see your posts or message you, and you won't see theirs. "
+            "Any follows between you are removed (unblocking doesn't restore them). X doesn't notify them.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("block", "Block")
+        dialog.set_response_appearance("block", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, response: response == "block" and run())
+        dialog.present(self)
 
     def delete_conversation(self, conversation_id: str, title: str) -> None:
         """Confirm, then delete a DM conversation from your inbox."""
@@ -651,6 +794,10 @@ class PerchWindow(Adw.ApplicationWindow):
         self._ensure_loaded()
         self._maybe_mark_seen()
         self._maybe_mark_inbox_seen()
+
+    def on_notifications_loaded(self) -> None:
+        """The All list loaded: if it's on screen, its newest notification counts as seen."""
+        self._maybe_mark_seen()
 
     def _maybe_mark_seen(self) -> None:
         view = self._views["notifications"]

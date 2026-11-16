@@ -175,6 +175,8 @@ class ProfilePage(Adw.NavigationPage):
         handle_row.append(Gtk.Label(label=f"@{self.handle}", xalign=0, css_classes=["dim-label"]))
         if user.get("followsYou") and user.get("id") != self._controller.me_id:
             handle_row.append(Gtk.Label(label="Follows you", css_classes=["follows-you", "caption"]))
+        if user.get("blocked"):
+            handle_row.append(Gtk.Label(label="Blocked", tooltip_text="You blocked this account", css_classes=["follows-you", "caption"]))
         if user.get("muted"):
             handle_row.append(Gtk.Label(label="Muted", tooltip_text="Their posts are hidden from your timelines", css_classes=["follows-you", "caption"]))
         info.append(handle_row)
@@ -238,14 +240,19 @@ class ProfilePage(Adw.NavigationPage):
         return group
 
     def _build_more_menu(self, user: dict) -> Gtk.MenuButton:
-        """⋯ on someone else's profile: mute / unmute."""
+        """⋯ on someone else's profile: mute / unmute, block / unblock."""
         menu = Gio.Menu()
         muted = bool(user.get("muted"))
         menu.append(f"Unmute @{self.handle}" if muted else f"Mute @{self.handle}", "profile.mute")
+        blocked = bool(user.get("blocked"))
+        menu.append(f"Unblock @{self.handle}" if blocked else f"Block @{self.handle}…", "profile.block")
         actions = Gio.SimpleActionGroup()
         mute = Gio.SimpleAction.new("mute", None)
         mute.connect("activate", lambda *_: self.user and self._controller.set_muted(self.user, not self.user.get("muted")))
         actions.add_action(mute)
+        block = Gio.SimpleAction.new("block", None)
+        block.connect("activate", lambda *_: self.user and self._controller.set_blocked(self.user, not self.user.get("blocked")))
+        actions.add_action(block)
         button = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="More", menu_model=menu, valign=Gtk.Align.CENTER)
         button.add_css_class("circular")
         # On the button itself: its popover menu always finds the action there.
@@ -261,6 +268,12 @@ class ProfilePage(Adw.NavigationPage):
         button.add_css_class("pill")
         button.connect("clicked", lambda *_: self._on_follow_clicked())
         self._sync_follow_button(button, bool(user.get("youFollow")))
+        if user.get("blocked"):
+            # X won't let you follow someone you've blocked: offer the unblock instead.
+            button.set_label("Unblock")
+            button.set_tooltip_text(f"Unblock @{self.handle}")
+            button.remove_css_class("suggested-action")
+            button.add_css_class("destructive-action")
         return button
 
     def _sync_follow_button(self, button: Gtk.Button, following: bool) -> None:
@@ -270,6 +283,9 @@ class ProfilePage(Adw.NavigationPage):
 
     def _on_follow_clicked(self) -> None:
         if not self.user:
+            return
+        if self.user.get("blocked"):
+            self._controller.set_blocked(self.user, False)
             return
         if self.user.get("youFollow"):
             dialog = Adw.AlertDialog(heading=f"Unfollow @{self.handle}?", body="Their posts will no longer show up in your Following timeline.")

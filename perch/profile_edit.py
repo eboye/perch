@@ -63,7 +63,7 @@ class ProfileEditDialog(Adw.Dialog):
         header.pack_end(self._spinner)
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin_bottom=18, margin_start=16, margin_end=16, margin_top=12)
-        self._error = Adw.Banner(revealed=False)
+        self._error = Adw.Banner(revealed=False, use_markup=False)
         body.append(self._error)
         body.append(self._build_pictures())
 
@@ -207,7 +207,7 @@ class ProfileEditDialog(Adw.Dialog):
     # -- saving -------------------------------------------------------------
 
     def _show_error(self, text: str) -> None:
-        self._error.set_title(GLib.markup_escape_text(text))
+        self._error.set_title(text)
         self._error.set_revealed(True)
 
     def _set_busy(self, busy: bool) -> None:

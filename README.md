@@ -1,10 +1,11 @@
 # Perch
 
 A small GTK 4 / libadwaita client for X — timelines, post pages with reply threads and edit history, user profiles with follow / unfollow and followers / following lists, editing your own profile (name, bio,
-location, website, photo, header), your likes, highlights, removing followers, muting people (and a
-muted-accounts list), who to follow, who reposted a post (and who liked
+location, website, photo, header), your likes, highlights, removing followers, muting and blocking people (with
+muted / blocked account lists), who to follow, who reposted a post (and who liked
 your own — X keeps likes private otherwise), search (posts and people), bookmarks, lists, like / repost / quote / bookmark, posting
-and replying with images (with alt text), scheduling posts (and cancelling them), deleting your own posts, swipeable galleries for multi-media posts, an in-app viewer for photos (with zoom), videos and GIFs, notifications, direct messages (and deleting conversations), desktop notifications (polled every
+and replying with images (with alt text), threads, scheduling posts (and cancelling them), deleting your own posts, swipeable galleries for multi-media posts, an in-app viewer for photos (with zoom), videos and GIFs, notifications (all, or just mentions), direct messages (with an unread filter, images, earlier
+history and deleting conversations), keyboard navigation (j / k / l / r, Ctrl+? for the list), desktop notifications (polled every
 2 minutes while the app is open), and listening to Spaces (live and replays) — built on
 [rettiwt-api](https://github.com/Rishikant181/Rettiwt-API) (the same unofficial library
 `mfh-dashboard` shells out to via `npx rettiwt-api`).

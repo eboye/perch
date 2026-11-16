@@ -231,6 +231,7 @@ function profile(key) {
 		followsYou: user.id !== '1004',
 		protected: false,
 		muted: mutedIds.has(user.id),
+		blocked: blockedIds.has(user.id),
 		highlightCount: user.id === '1003' ? 12 : 0,
 	};
 }
@@ -246,6 +247,30 @@ function setMuted(id, mute) {
 	if (mute) mutedIds.add(String(id));
 	else mutedIds.delete(String(id));
 	return { ok: true };
+}
+
+// Blocked accounts, kept in memory for the demo session (starts empty).
+const blockedIds = new Set();
+
+function blocked() {
+	return { list: [...blockedIds].map((id) => profile(id)), next: '' };
+}
+
+function setBlocked(id, block) {
+	if (block) blockedIds.add(String(id));
+	else blockedIds.delete(String(id));
+	return { ok: true };
+}
+
+// Mentions: replies from other people that @mention you, two pages.
+function mentions(cursor) {
+	const page = cursor ? Number(cursor) : 0;
+	const list = Array.from({ length: 8 }, (_, i) => {
+		const by = users[1 + ((page * 8 + i) % 4)];
+		const t = tweet(page * 8 + i + 200, 'following', true);
+		return { ...t, tweetBy: by, fullText: `@${users[0].userName} ${t.fullText}`, replyTo: '900001', url: `https://x.com/${by.userName}/status/${t.id}` };
+	});
+	return { list, next: page < 1 ? String(page + 1) : '' };
 }
 
 // Who to follow: the demo accounts you don't follow (and aren't you).
@@ -347,6 +372,9 @@ function unschedule(id) {
 }
 
 module.exports = {
+	blocked,
+	setBlocked,
+	mentions,
 	olderMessages,
 	muted,
 	setMuted,

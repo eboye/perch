@@ -17,6 +17,9 @@ const { signedFetch } = require('./xhttp');
 const inbox = require('./inbox');
 const demo = require('./demo');
 const { ResponseCache } = require('./cache');
+const { UserRequests } = require('rettiwt-api/dist/requests/User');
+const { CursoredData } = require('rettiwt-api/dist/models/data/CursoredData');
+const { BaseType } = require('rettiwt-api/dist/enums/Data');
 
 let client = null;
 const cache = new ResponseCache();
@@ -134,6 +137,43 @@ const methods = {
 		return { ok: true };
 	},
 
+	// Block or unblock someone: a block also unfollows both ways and hides them from each other.
+	// rettiwt has no block, so this posts to the web client's v1.1 endpoint. { id, block } -> { ok }
+	'user.block': async ({ id, block }) => {
+		if (!id) throw new Error('Missing user id');
+		if (demoMode) return demo.setBlocked(String(id), Boolean(block));
+		const action = block ? 'create' : 'destroy';
+		await postForm(`https://x.com/i/api/1.1/blocks/${action}.json`, new URLSearchParams({ user_id: String(id), skip_status: '1' }));
+		return { ok: true };
+	},
+
+	// Accounts you've blocked, most recent first. { cursor? } -> { list: users, next }
+	'user.blocked': async ({ cursor }) => {
+		if (demoMode) return demo.blocked();
+		requireClient();
+		const url = new URL('https://x.com/i/api/1.1/blocks/list.json');
+		url.search = new URLSearchParams({ count: '40', skip_status: '1', include_entities: 'true', cursor: cursor || '-1' });
+		const res = await signedFetch(client, url);
+		if (!res.ok) throw Object.assign(new Error(`Couldn’t load blocked accounts (HTTP ${res.status})`), { status: res.status });
+		const body = await res.json();
+		const next = body.next_cursor_str && body.next_cursor_str !== '0' ? body.next_cursor_str : '';
+		return { list: (body.users || []).map((u) => ({ ...serializeLegacyUser(u), blocked: true })), next };
+	},
+
+	// Posts that mention you (X's Notifications → Mentions). { cursor? } -> { list: posts, next }
+	'notifications.mentions': async ({ cursor }) => {
+		if (demoMode) return demo.mentions(cursor);
+		requireClient();
+		const config = UserRequests.notifications(20, cursor || undefined);
+		const variables = { ...JSON.parse(config.params.variables), timeline_type: 'Mentions' };
+		const url = new URL(config.url);
+		url.search = new URLSearchParams({ ...config.params, variables: JSON.stringify(variables) });
+		const res = await signedFetch(client, url);
+		if (!res.ok) throw Object.assign(new Error(`Couldn’t load mentions (HTTP ${res.status})`), { status: res.status });
+		const data = new CursoredData(await res.json(), BaseType.TWEET);
+		return { list: data.list.map(serializeTweet), next: data.list.length ? data.next : '' };
+	},
+
 	// Accounts you've muted, most recent first. { cursor? } -> { list: users, next }
 	'user.muted': async ({ cursor }) => {
 		if (demoMode) return demo.muted();
@@ -144,7 +184,7 @@ const methods = {
 		if (!res.ok) throw Object.assign(new Error(`Couldn’t load muted accounts (HTTP ${res.status})`), { status: res.status });
 		const body = await res.json();
 		const next = body.next_cursor_str && body.next_cursor_str !== '0' ? body.next_cursor_str : '';
-		return { list: (body.users || []).map(serializeLegacyUser), next };
+		return { list: (body.users || []).map((u) => ({ ...serializeLegacyUser(u), muted: true })), next };
 	},
 
 	// Accounts X suggests following (its Connect tab). {} -> { list: users, next }
@@ -506,6 +546,7 @@ function serializeUser(user) {
 	}
 	out.protected = Boolean(legacy.protected ?? user.raw?.privacy?.protected);
 	out.muted = Boolean(user.raw?.relationship_perspectives?.muting ?? legacy.muting);
+	out.blocked = Boolean(user.raw?.relationship_perspectives?.blocking ?? legacy.blocking);
 	out.highlightCount = Number(user.raw?.highlights_info?.highlighted_tweets) || 0;
 	return out;
 }
@@ -532,7 +573,7 @@ function serializeLegacyUser(u) {
 		youFollow: Boolean(u.following),
 		followsYou: Boolean(u.followed_by),
 		protected: Boolean(u.protected),
-		muted: u.muting ?? true,
+		muted: Boolean(u.muting),
 	};
 }
 

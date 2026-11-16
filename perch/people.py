@@ -44,6 +44,10 @@ class _PeopleView(PagedListView):
             unmute = _pill("Unmute", f"Show @{handle}’s posts again")
             unmute.connect("clicked", lambda button: (button.set_sensitive(False), self._controller.set_muted(row.user, False)))
             row.add_suffix(unmute)
+        elif self._method == "user.blocked":
+            unblock = _pill("Unblock", f"Unblock @{handle}")
+            unblock.connect("clicked", lambda button: (button.set_sensitive(False), self._controller.set_blocked(row.user, False)))
+            row.add_suffix(unblock)
         elif self._method == "user.suggestions":
             follow = _pill("Follow", f"Follow @{handle}")
             follow.add_css_class("suggested-action")

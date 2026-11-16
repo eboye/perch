@@ -3,7 +3,7 @@
 Subclasses implement ``fetch_page``, ``make_row`` and optionally ``item_id`` / ``on_page_loaded``.
 """
 
-from gi.repository import Adw, GLib, GObject, Gtk
+from gi.repository import Adw, GLib, GObject, Graphene, Gtk
 
 from perch.sidecar import RpcError
 
@@ -162,6 +162,40 @@ class PagedListView(Gtk.Stack):
     def _on_edge_reached(self, _scroller, position: Gtk.PositionType) -> None:
         if position == Gtk.PositionType.BOTTOM:
             self.load_more()
+
+    # -- keyboard navigation (see window._on_key) ------------------------------
+
+    @property
+    def list_box(self) -> Gtk.ListBox:
+        return self._list
+
+    def visible_rows(self) -> list[Gtk.ListBoxRow]:
+        """Rows on the page in order (hidden / filtered-out rows skipped)."""
+        rows, index = [], 0
+        while row := self._list.get_row_at_index(index):
+            if row.get_visible() and row.get_child_visible() and row.get_mapped():
+                rows.append(row)
+            index += 1
+        return rows
+
+    def first_row_on_screen(self) -> Gtk.ListBoxRow | None:
+        for row in self.visible_rows():
+            ok, point = row.compute_point(self._scroller, Graphene.Point().init(0, 0))
+            if ok and point.y + row.get_height() / 2 >= 0:
+                return row
+        return None
+
+    def scroll_to_row(self, row: Gtk.ListBoxRow) -> None:
+        """Scroll just enough to show the whole row (or its top, if it's taller than the view)."""
+        ok, point = row.compute_point(self._scroller, Graphene.Point().init(0, 0))
+        if not ok:
+            return
+        adjustment = self._scroller.get_vadjustment()
+        view_height = self._scroller.get_height()
+        if point.y < 0 or row.get_height() > view_height:
+            adjustment.set_value(adjustment.get_value() + point.y - 8)
+        elif point.y + row.get_height() > view_height:
+            adjustment.set_value(adjustment.get_value() + point.y + row.get_height() - view_height + 8)
 
     def hide_rows(self, predicate) -> None:
         """Hide the loaded rows ``predicate(row)`` picks (e.g. posts by someone you just muted)."""

@@ -1,11 +1,15 @@
 """Direct messages: inbox list (a tab) and a conversation page pushed on the window's NavigationView."""
 
-from gi.repository import Adw, Gio, GLib, Gtk, Pango
+from pathlib import Path
+
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from perch import format as fmt
 from perch import images
 from perch.paged_list import PagedListView
 
+# Image types X accepts in a message.
+DM_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp")
 ENCRYPTED_TEXT = "Encrypted message — open X to read it"
 UNKNOWN_TEXT = "Message Perch can’t show — open X to see it"
 # Conversations with at least this many messages offer "Load Earlier Messages".
@@ -102,6 +106,23 @@ class InboxView(PagedListView):
         # Inbox-level "seen" state on X (drives X's envelope badge; see window._maybe_mark_inbox_seen).
         self.newest_event_id: str | None = None
         self.last_seen_event_id: str | None = None
+        # All / Unread switch; Unread hides read conversations (a filter on the loaded rows).
+        self.unread_only = False
+        switch = Adw.ToggleGroup(halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=4)
+        switch.add_css_class("round")
+        switch.add(Adw.Toggle(name="all", label="All"))
+        self._unread_toggle = Adw.Toggle(name="unread", label="Unread")
+        switch.add(self._unread_toggle)
+        switch.set_active_name("all")
+        switch.connect("notify::active-name", lambda group, _p: self.set_unread_only(group.get_active_name() == "unread"))
+        self.set_header(switch)
+        self._list.set_filter_func(lambda row: not self.unread_only or bool(row.conversation.get("unread")))
+        placeholder = Gtk.Label(label="No unread conversations", margin_top=24, margin_bottom=24, css_classes=["dim-label"])
+        self._list.set_placeholder(placeholder)
+
+    def set_unread_only(self, unread_only: bool) -> None:
+        self.unread_only = unread_only
+        self._list.invalidate_filter()
 
     def fetch_page(self, cursor, callback) -> None:
         def adapt(result, error):
@@ -156,6 +177,8 @@ class InboxView(PagedListView):
             count += bool(row.conversation.get("unread"))
             index += 1
         self.unread_count = count
+        self._unread_toggle.set_label(f"Unread ({count})" if count else "Unread")
+        self._list.invalidate_filter()
         self._controller.update_badges()
 
 
@@ -166,6 +189,22 @@ class _Bubble(Gtk.ListBoxRow):
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, halign=Gtk.Align.END if mine else Gtk.Align.START)
         if show_sender and sender:
             column.append(Gtk.Label(label=sender.get("fullName") or "", xalign=0, css_classes=["caption", "dim-label"]))
+
+        # An image you just sent from Perch (a local file). Images X sends back are behind X's
+        # sign-in, so those stay a "📎 Attachment" line.
+        if local_image := message.get("localImage"):
+            picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, width_request=200, height_request=150, halign=Gtk.Align.END if mine else Gtk.Align.START)
+            picture.add_css_class("media")
+            picture.add_css_class("bubble-image")
+            try:
+                picture.set_paintable(Gdk.Texture.new_from_filename(local_image))
+            except GLib.Error:
+                picture = None
+            if picture is not None:
+                column.append(picture)
+                if not message.get("text"):
+                    self._finish(column, message, mine)
+                    return
 
         text = message.get("text") or ""
         encrypted = message.get("isEncrypted") and not text
@@ -188,7 +227,9 @@ class _Bubble(Gtk.ListBoxRow):
         if encrypted or unknown:
             body.add_css_class("encrypted")
         column.append(body)
+        self._finish(column, message, mine)
 
+    def _finish(self, column: Gtk.Box, message: dict, mine: bool) -> None:
         self._meta = Gtk.Label(xalign=1 if mine else 0, css_classes=["caption", "dim-label"])
         self._meta.set_tooltip_text(fmt.full_time(message.get("createdAt")))
         column.append(self._meta)
@@ -255,10 +296,30 @@ class ConversationPage(Adw.NavigationPage):
         self._stack.add_named(self._scroller, "messages")
 
         composer = Gtk.Box(spacing=6, margin_start=12, margin_end=12, margin_top=6, margin_bottom=6)
+        attach = Gtk.Button(icon_name="insert-image-symbolic", tooltip_text="Add Image")
+        attach.add_css_class("flat")
+        attach.connect("clicked", lambda *_: self._pick_image())
+        composer.append(attach)
         self._entry = Gtk.Entry(placeholder_text="Message", hexpand=True)
         self._entry.connect("activate", lambda *_: self._send())
-        self._entry.connect("changed", lambda *_: self._send_button.set_sensitive(bool(self._entry.get_text().strip())))
+        self._entry.connect("changed", lambda *_: self._sync_send())
         composer.append(self._entry)
+        # The picked image (one per message, X's limit), above the message box.
+        self._image_path: str | None = None
+        self._attachment = Gtk.Box(spacing=8, margin_start=12, margin_end=12, margin_top=6, visible=False)
+        self._attachment_picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, width_request=56, height_request=56)
+        self._attachment_picture.add_css_class("media")
+        self._attachment.append(self._attachment_picture)
+        self._attachment_name = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.MIDDLE, css_classes=["dim-label"])
+        self._attachment.append(self._attachment_name)
+        remove = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="Remove Image", valign=Gtk.Align.CENTER)
+        remove.add_css_class("flat")
+        remove.add_css_class("circular")
+        remove.connect("clicked", lambda *_: self._set_image(None))
+        self._attachment.append(remove)
+        bottom = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        bottom.append(self._attachment)
+        bottom.append(composer)
         self._send_button = Gtk.Button(icon_name="mail-send-symbolic", tooltip_text="Send", sensitive=False)
         self._send_button.add_css_class("suggested-action")
         self._send_button.add_css_class("circular")
@@ -267,7 +328,7 @@ class ConversationPage(Adw.NavigationPage):
 
         view = Adw.ToolbarView(content=self._stack)
         view.add_top_bar(header)
-        view.add_bottom_bar(composer)
+        view.add_bottom_bar(bottom)
         self.set_child(view)
         self.reload()
 
@@ -376,14 +437,50 @@ class ConversationPage(Adw.NavigationPage):
         GLib.idle_add(go)
         GLib.timeout_add(150, go)  # again after the bubbles have been measured
 
+    def _sync_send(self) -> None:
+        self._send_button.set_sensitive(bool(self._entry.get_text().strip()) or self._image_path is not None)
+
+    def _pick_image(self) -> None:
+        image_filter = Gtk.FileFilter(name="Images")
+        for mime in DM_IMAGE_TYPES:
+            image_filter.add_mime_type(mime)
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(image_filter)
+        dialog = Gtk.FileDialog(title="Add Image", filters=filters, default_filter=image_filter)
+
+        def done(source, result):
+            try:
+                file = source.open_finish(result)
+            except GLib.Error:
+                return  # cancelled
+            if file and file.get_path():
+                self._set_image(file.get_path())
+
+        dialog.open(self.get_root(), None, done)
+
+    def _set_image(self, path: str | None) -> None:
+        if path:
+            try:
+                self._attachment_picture.set_paintable(Gdk.Texture.new_from_filename(path))
+            except GLib.Error:
+                self._controller.toast("Couldn't open that image")
+                return
+            self._attachment_name.set_label(Path(path).name)
+        self._image_path = path
+        self._attachment.set_visible(path is not None)
+        self._sync_send()
+        self._entry.grab_focus()
+
     def _send(self) -> None:
         text = self._entry.get_text().strip()
-        if not text:
+        image = self._image_path
+        if not text and not image:
             return
         self._entry.set_text("")
+        self._set_image(None)
         local_id = f"local-{GLib.get_monotonic_time()}"
         now = GLib.DateTime.new_now_utc().format_iso8601()
-        bubble = self._append({"id": local_id, "senderId": self._controller.me_id, "text": text, "createdAt": now})
+        bubble = self._append({"id": local_id, "senderId": self._controller.me_id, "text": text, "createdAt": now, "localImage": image})
         bubble.set_status("Sending…")
         self._stack.set_visible_child_name("messages")
         self._scroll_to_bottom()
@@ -394,7 +491,7 @@ class ConversationPage(Adw.NavigationPage):
                 return
             self._message_ids.add(result.get("id") or local_id)
             bubble.set_status(fmt.relative_time(result.get("createdAt")) or "now")
-            sent = {"id": result.get("id"), "senderId": self._controller.me_id, "text": text, "createdAt": result.get("createdAt") or now}
+            sent = {"id": result.get("id"), "senderId": self._controller.me_id, "text": text or "📷 Photo", "createdAt": result.get("createdAt") or now}
             self._controller.on_dm_sent(self.conversation_id, sent)
 
-        self._controller.sidecar.call("dm.send", {"conversationId": self.conversation_id, "text": text}, done)
+        self._controller.sidecar.call("dm.send", {"conversationId": self.conversation_id, "text": text, "mediaPath": image}, done)

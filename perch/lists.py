@@ -361,7 +361,7 @@ class ListEditorDialog(Adw.Dialog):
         for row in (self._name, self._description, self._private):
             group.add(row)
         page.add(group)
-        self._error = Adw.Banner(revealed=False)
+        self._error = Adw.Banner(revealed=False, use_markup=False)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.append(self._error)
@@ -382,7 +382,7 @@ class ListEditorDialog(Adw.Dialog):
         def done(result, error):
             self._save.set_sensitive(True)
             if error:
-                self._error.set_title(GLib.markup_escape_text(self._controller.describe_error(error, "Couldn't save the list")))
+                self._error.set_title(self._controller.describe_error(error, "Couldn't save the list"))
                 self._error.set_revealed(True)
                 return
             self.close()

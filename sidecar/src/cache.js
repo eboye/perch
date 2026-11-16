@@ -28,6 +28,8 @@ const TTL = {
 	'user.posts': 60,
 	'user.connections': 120,
 	'user.muted': 60,
+	'user.blocked': 60,
+	'notifications.mentions': 15,
 	'user.suggestions': 600,
 	'search.posts': 60,
 	'search.users': 120,
@@ -45,8 +47,8 @@ const TTL = {
 };
 const OLDER_PAGE_TTL = 300;
 
-const TWEET_READS = ['timeline', 'tweet.details', 'tweet.replies', 'user.posts', 'search.posts', 'bookmarks', 'list.tweets', 'notifications'];
-const USER_READS = ['user.profile', 'user.connections', 'user.suggestions', 'user.muted', 'search.users', 'tweet.engagers', 'list.members'];
+const TWEET_READS = ['timeline', 'tweet.details', 'tweet.replies', 'user.posts', 'search.posts', 'bookmarks', 'list.tweets', 'notifications', 'notifications.mentions'];
+const USER_READS = ['user.profile', 'user.connections', 'user.suggestions', 'user.muted', 'user.blocked', 'search.users', 'tweet.engagers', 'list.members'];
 const LIST_READS = ['lists', 'list.details', 'list.tweets', 'list.members', 'list.hasMember'];
 const DM_READS = ['dm.inbox', 'dm.conversation', 'dm.older'];
 
@@ -59,7 +61,8 @@ const INVALIDATES = {
 	'tweet.unschedule': ['tweet.scheduled'],
 	'user.follow': [...USER_READS, 'timeline', 'me'],
 	'user.removeFollower': [...USER_READS, 'me'],
-	'user.mute': [...USER_READS, 'timeline', 'notifications'],
+	'user.mute': [...USER_READS, 'timeline', 'notifications', 'notifications.mentions'],
+	'user.block': [...USER_READS, ...TWEET_READS, 'me'],
 	'profile.update': ['me', ...USER_READS, ...TWEET_READS],
 	'profile.picture': ['me', ...USER_READS, ...TWEET_READS],
 	'list.create': LIST_READS,

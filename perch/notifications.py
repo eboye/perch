@@ -7,7 +7,7 @@ from gi.repository import Adw, Gtk, Pango
 from perch import format as fmt
 from perch import images, settings
 from perch.paged_list import PagedListView
-from perch.tweet_row import link_to_profile
+from perch.tweet_row import TweetRow, link_to_profile
 
 # notification_icon -> (symbolic icon, css class)
 _ICONS = {
@@ -90,29 +90,59 @@ class NotificationRow(Gtk.ListBoxRow):
 
 
 class NotificationsView(PagedListView):
+    """All notifications, or (``mode='mentions'``) the posts that mention you."""
+
     error_title = "Couldn't load notifications"
     empty_title = "No notifications yet"
     empty_icon = "preferences-system-notifications-symbolic"
+    # The All / Mentions switch sits above the rows, so the list stays on screen even when empty.
+    always_show_list = True
 
     def __init__(self, controller):
+        self.mode = "all"
         super().__init__(controller)
         self._seen_at = settings.get("notifications_seen_at") or ""
         self.newest_at = ""
+        switch = Adw.ToggleGroup(halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=4)
+        switch.add_css_class("round")
+        switch.add(Adw.Toggle(name="all", label="All"))
+        switch.add(Adw.Toggle(name="mentions", label="Mentions"))
+        switch.set_active_name("all")
+        switch.connect("notify::active-name", lambda group, _p: self.set_mode(group.get_active_name()))
+        self.set_header(switch)
+
+    @property
+    def empty_label(self) -> str:  # noqa: D401 - read by PagedListView
+        return "No mentions yet" if self.mode == "mentions" else "No notifications yet"
+
+    def set_mode(self, mode: str) -> None:
+        if mode != self.mode:
+            self.mode = mode
+            self.reload()
 
     def fetch_page(self, cursor, callback) -> None:
+        if self.mode == "mentions":
+            self._controller.sidecar.call("notifications.mentions", {"cursor": cursor}, callback)
+            return
         if cursor is None:  # fresh load: unread dots relative to what was last marked seen
             self._seen_at = settings.get("notifications_seen_at") or ""
         self._controller.sidecar.call("notifications", {"cursor": cursor}, callback)
 
-    def make_row(self, item: dict, page: dict) -> NotificationRow:
+    def make_row(self, item: dict, page: dict) -> Gtk.ListBoxRow:
+        if self.mode == "mentions":
+            return TweetRow(item, self._controller)
         received = item.get("receivedAt") or ""
         return NotificationRow(item, page.get("users") or {}, unread=bool(self._seen_at) and received > self._seen_at, controller=self._controller)
 
     def on_page_loaded(self, page: dict, first: bool) -> None:
-        if first and page.get("list"):
+        if self.mode == "all" and first and page.get("list"):
             self.newest_at = max(item.get("receivedAt") or "" for item in page["list"])
+            self._controller.on_notifications_loaded()
 
-    def on_row_activated(self, row: NotificationRow) -> None:
+    def on_row_activated(self, row: Gtk.ListBoxRow) -> None:
+        if isinstance(row, TweetRow):
+            row.activate_post()
+            return
         # Likes, reposts, replies, mentions → the post page; follows → the profile page;
         # anything else → the browser.
         if row.post_id:
