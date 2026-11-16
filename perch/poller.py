@@ -1,4 +1,5 @@
-"""Polls notifications and the DM inbox while signed in: tab badges + desktop notifications."""
+"""Polls notifications, the DM inbox and the Following timeline while signed in: tab badges,
+desktop notifications and the "new posts" pill."""
 
 from gi.repository import Gio, GLib
 
@@ -16,6 +17,7 @@ class Poller:
         self._known_notifications: set[str] = set()
         self._known_messages: set[str] = set()
         self._baseline = {"notifications": False, "inbox": False}
+        self._ticks = 0
 
     def start(self) -> None:
         if self._source is None:
@@ -29,12 +31,25 @@ class Poller:
         self._known_notifications.clear()
         self._known_messages.clear()
         self._baseline = {"notifications": False, "inbox": False}
+        self._ticks = 0
 
     def _tick(self) -> bool:
         sidecar = self._window.sidecar
         sidecar.call("notifications", {"fresh": True}, self._on_notifications)
         sidecar.call("dm.inbox", {"meId": self._window.me_id, "fresh": True}, self._on_inbox)
+        # New posts in Following (only once that timeline has been opened). The result is cached, so
+        # showing the new posts afterwards costs no second request.
+        # Not on the first round: at sign-in the timeline has only just been loaded.
+        if self._ticks and self._window.timeline_loaded("following"):
+            sidecar.call("timeline", {"kind": "following", "fresh": True}, self._on_timeline)
+        self._ticks += 1
         return GLib.SOURCE_CONTINUE
+
+    def _on_timeline(self, result, error) -> None:
+        if error:
+            print(f"[perch] timeline poll failed: {error}")
+            return
+        self._window.on_timeline_polled("following", result.get("list") or [])
 
     # -- notifications ------------------------------------------------------
 

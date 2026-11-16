@@ -31,9 +31,9 @@ def link_to_profile(widget: Gtk.Widget, user: dict, controller) -> None:
     widget.set_tooltip_text(f"View @{user['userName']}’s profile")
 
 
-def _post_menu(tweet: dict, controller, on_deleted) -> Gtk.MenuButton:
-    """The ⋯ button on a post: copy its link, open it in the browser, delete it (your own posts) or
-    mute its author (anyone else's)."""
+def _post_menu(tweet: dict, controller, on_deleted, on_translate=None) -> Gtk.MenuButton:
+    """The ⋯ button on a post: copy its link, open it in the browser, translate it (another
+    language), delete it (your own posts) or mute / block its author (anyone else's)."""
     # The button sits at the row's right edge: align the popover's end with it so it opens
     # leftwards instead of running off the window.
     popover = Gtk.Popover(has_arrow=True, halign=Gtk.Align.END)
@@ -52,6 +52,8 @@ def _post_menu(tweet: dict, controller, on_deleted) -> Gtk.MenuButton:
     if url:
         item("Copy Link", lambda: (Gdk.Display.get_default().get_clipboard().set(url), controller.toast("Link copied")))
         item("Open in Browser", lambda: Gtk.UriLauncher(uri=url).launch(menu.get_root(), None, None, None))
+    if on_translate and fmt.needs_translation(tweet.get("lang")):
+        item("Translate Post", on_translate)
     author = tweet.get("tweetBy") or {}
     if author.get("id") == controller.me_id:
         item("Delete Post…", lambda: controller.delete_post(tweet, on_deleted), destructive=True)
@@ -551,10 +553,13 @@ class TweetRow(Gtk.ListBoxRow):
         row.append(avatar)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
-        menu = _post_menu(shown, controller, self._on_deleted) if hasattr(controller, "delete_post") else None
+        menu = _post_menu(shown, controller, self._on_deleted, self.translate) if hasattr(controller, "delete_post") else None
         content.append(_header(user, shown.get("createdAt"), controller, edited=bool(shown.get("edited")), menu=menu))
         if body := _body(shown, controller):
             content.append(body)
+        # X's translation, under the original once asked for (⋯ → Translate Post).
+        self._translation = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, visible=False, css_classes=["translation"])
+        content.append(self._translation)
         if media := _media(shown.get("media"), controller, shown.get("url")):
             content.append(media)
         for space_id in fmt.space_ids(shown):
@@ -568,6 +573,39 @@ class TweetRow(Gtk.ListBoxRow):
         row.append(content)
         outer.append(row)
         self.set_child(outer)
+
+    def translate(self) -> None:
+        """Ask X for a translation of this post and show it under the original."""
+        if self._translation.get_visible():
+            return
+        spinner = Adw.Spinner(halign=Gtk.Align.START, width_request=16, height_request=16)
+        self._translation.append(spinner)
+        self._translation.set_visible(True)
+
+        def done(result, error):
+            self._translation.remove(spinner)
+            if error:
+                self._translation.set_visible(False)
+                self._controller.report_error(error, "Couldn't translate the post")
+                return
+            source = result.get("from") or "another language"
+            heading = Gtk.Box(spacing=6)
+            heading.append(_label(f"Translated from {source}", "dim-label", "caption", hexpand=True))
+            hide = Gtk.Button(label="Hide", css_classes=["flat", "caption"], valign=Gtk.Align.CENTER)
+            hide.connect("clicked", lambda *_: self._clear_translation())
+            heading.append(hide)
+            self._translation.append(heading)
+            text = Gtk.Label(xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, selectable=True, use_markup=True)
+            text.set_markup(fmt.tweet_markup(result.get("text") or ""))
+            text.connect("activate-link", lambda _label, uri: self._controller.open_link(uri))
+            self._translation.append(text)
+
+        self._controller.sidecar.call("tweet.translate", {"id": self.tweet["id"]}, done)
+
+    def _clear_translation(self) -> None:
+        while child := self._translation.get_first_child():
+            self._translation.remove(child)
+        self._translation.set_visible(False)
 
     def _on_deleted(self) -> None:
         """The post is gone on X: drop it from this list (the repost wrapper too)."""

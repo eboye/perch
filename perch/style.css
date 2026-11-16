@@ -137,6 +137,17 @@
   color: var(--accent-fg-color);
 }
 
+/* A post's translation (⋯ → Translate Post), set apart from the original. */
+.translation {
+  border-left: 3px solid alpha(currentColor, 0.15);
+  padding-left: 10px;
+}
+
+/* "N new posts" pill over a timeline. */
+button.new-posts {
+  box-shadow: 0 2px 6px alpha(black, 0.2);
+}
+
 .bubble.encrypted {
   font-style: italic;
   opacity: 0.7;

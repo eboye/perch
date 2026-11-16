@@ -67,7 +67,12 @@ class PagedListView(Gtk.Stack):
 
         self._scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, child=clamp, vexpand=True)
         self._scroller.connect("edge-reached", self._on_edge_reached)
-        self.add_named(self._scroller, "list")
+        # A pill over the top of the list for "N new posts" (timelines; see offer_new_posts).
+        overlay = Gtk.Overlay(child=self._scroller)
+        self._new_posts = Gtk.Button(halign=Gtk.Align.CENTER, valign=Gtk.Align.START, margin_top=10, visible=False, css_classes=["pill", "suggested-action", "new-posts"])
+        self._new_posts.connect("clicked", lambda *_: self._show_new_posts())
+        overlay.add_overlay(self._new_posts)
+        self.add_named(overlay, "list")
         self.set_visible_child_name("loading")
 
     def set_header(self, widget: Gtk.Widget) -> None:
@@ -96,6 +101,7 @@ class PagedListView(Gtk.Stack):
     # -- loading ------------------------------------------------------------
 
     def reload(self) -> None:
+        self._new_posts.set_visible(False)
         self._generation += 1
         self._cursor = None
         self._seen.clear()
@@ -162,6 +168,30 @@ class PagedListView(Gtk.Stack):
     def _on_edge_reached(self, _scroller, position: Gtk.PositionType) -> None:
         if position == Gtk.PositionType.BOTTOM:
             self.load_more()
+
+    # -- new posts pill ---------------------------------------------------------
+
+    def count_new(self, items: list[dict]) -> int:
+        """How many of ``items`` (a fresh first page) are newer than everything loaded here."""
+        loaded = [int(key) for key in self._seen if str(key).isdigit()]
+        newest = max(loaded) if loaded else None
+        return sum(
+            1
+            for item in items
+            if (key := self.item_id(item)) and key not in self._seen and str(key).isdigit() and (newest is None or int(key) > newest)
+        )
+
+    def offer_new_posts(self, count: int) -> None:
+        if count <= 0 or not self.loaded_once:
+            return
+        self._new_posts.set_label(f"↑ {count} new post{'s' if count != 1 else ''}")
+        self._new_posts.set_tooltip_text("Show the new posts")
+        self._new_posts.set_visible(True)
+
+    def _show_new_posts(self) -> None:
+        self._new_posts.set_visible(False)
+        self.scroll_to_top()
+        self.reload()  # the poll's result is still cached, so this doesn't ask X again
 
     # -- keyboard navigation (see window._on_key) ------------------------------
 

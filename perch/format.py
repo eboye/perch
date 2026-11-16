@@ -37,6 +37,27 @@ def tweet_markup(text: str, strip_trailing_link: bool = False) -> str:
     return "".join(out).strip()
 
 
+# X's "lang" values that aren't a language: undetermined, no text, media / mentions / hashtags /
+# cashtags only, emoji only.
+_NOT_A_LANGUAGE = {"und", "zxx", "qme", "qam", "qht", "qct", "qst", "art"}
+
+
+def user_language() -> str:
+    """The desktop's language as a two-letter code (``en`` when it can't be told)."""
+    for name in GLib.get_language_names():
+        code = name.split("_")[0].split(".")[0].split("@")[0].lower()
+        if code and code not in ("c", "posix"):
+            return code
+    return "en"
+
+
+def needs_translation(lang: str | None, mine: str | None = None) -> bool:
+    """Whether a post in ``lang`` (X's code) is in a language other than the reader's."""
+    if not lang or lang in _NOT_A_LANGUAGE:
+        return False
+    return lang.split("-")[0].lower() != (mine or user_language())
+
+
 def compact_count(value) -> str:
     if not value:
         return ""

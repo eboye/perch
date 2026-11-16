@@ -1,5 +1,7 @@
 """Direct messages: inbox list (a tab) and a conversation page pushed on the window's NavigationView."""
 
+import base64
+import re
 from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
@@ -8,6 +10,8 @@ from perch import format as fmt
 from perch import images
 from perch.paged_list import PagedListView
 
+# A photo attached to a DM (X serves it only with the session; see the sidecar's dm.media).
+DM_PHOTO_URL = re.compile(r"^https://ton\.(?:x|twitter)\.com/(?:i/ton|1\.1/ton)/data/dm/")
 # Image types X accepts in a message.
 DM_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp")
 ENCRYPTED_TEXT = "Encrypted message — open X to read it"
@@ -182,29 +186,44 @@ class InboxView(PagedListView):
         self._controller.update_badges()
 
 
+def _show_photo_dialog(parent: Gtk.Widget, texture: Gdk.Paintable | None) -> None:
+    if texture is None:
+        return
+    picture = Gtk.Picture(paintable=texture, content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True, vexpand=True, hexpand=True)
+    view = Adw.ToolbarView(content=picture)
+    view.add_top_bar(Adw.HeaderBar())
+    width = min(1000, max(320, texture.get_intrinsic_width()))
+    height = min(800, max(240, texture.get_intrinsic_height() + 48))
+    dialog = Adw.Dialog(title="Photo", child=view, content_width=width, content_height=height)
+    dialog.present(parent.get_root())
+
+
 class _Bubble(Gtk.ListBoxRow):
-    def __init__(self, message: dict, mine: bool, sender: dict | None, show_sender: bool, on_link=None):
+    def __init__(self, message: dict, mine: bool, sender: dict | None, show_sender: bool, on_link=None, load_photo=None):
+        """``load_photo(url, callback)`` loads a DM photo (they need the X session)."""
         super().__init__(activatable=False, selectable=False)
         self.add_css_class("bubble-row")
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, halign=Gtk.Align.END if mine else Gtk.Align.START)
         if show_sender and sender:
             column.append(Gtk.Label(label=sender.get("fullName") or "", xalign=0, css_classes=["caption", "dim-label"]))
 
-        # An image you just sent from Perch (a local file). Images X sends back are behind X's
-        # sign-in, so those stay a "📎 Attachment" line.
+        # Photos: one you just sent from Perch (a local file), or ones X has (loaded with the session).
+        photos = 0
         if local_image := message.get("localImage"):
-            picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, width_request=200, height_request=150, halign=Gtk.Align.END if mine else Gtk.Align.START)
-            picture.add_css_class("media")
-            picture.add_css_class("bubble-image")
             try:
-                picture.set_paintable(Gdk.Texture.new_from_filename(local_image))
+                column.append(self._photo(mine, Gdk.Texture.new_from_filename(local_image)))
+                photos += 1
             except GLib.Error:
-                picture = None
-            if picture is not None:
+                pass
+        elif load_photo:
+            for url in [u for u in message.get("mediaUrls") or [] if DM_PHOTO_URL.match(u)][:4]:
+                picture = self._photo(mine, None)
+                load_photo(url, lambda texture, p=picture: self._show_photo(p, texture))
                 column.append(picture)
-                if not message.get("text"):
-                    self._finish(column, message, mine)
-                    return
+                photos += 1
+        if photos and not message.get("text"):
+            self._finish(column, message, mine)
+            return
 
         text = message.get("text") or ""
         encrypted = message.get("isEncrypted") and not text
@@ -228,6 +247,29 @@ class _Bubble(Gtk.ListBoxRow):
             body.add_css_class("encrypted")
         column.append(body)
         self._finish(column, message, mine)
+
+    @staticmethod
+    def _photo(mine: bool, texture: Gdk.Texture | None) -> Gtk.Widget:
+        """A photo in a bubble: click to see it larger."""
+        picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, width_request=220, height_request=165, can_shrink=True)
+        picture.add_css_class("media")
+        picture.add_css_class("bubble-image")
+        button = Gtk.Button(child=picture, halign=Gtk.Align.END if mine else Gtk.Align.START, tooltip_text="View Photo", sensitive=texture is not None)
+        button.add_css_class("flat")
+        button.add_css_class("bubble-photo")
+        button.connect("clicked", lambda b: _show_photo_dialog(b, picture.get_paintable()))
+        if texture is not None:
+            picture.set_paintable(texture)
+        return button
+
+    @staticmethod
+    def _show_photo(button: Gtk.Button, texture: Gdk.Texture | None) -> None:
+        picture = button.get_child()
+        if texture is None:
+            button.set_child(Gtk.Label(label="📎 Photo X wouldn't send", css_classes=["dim-label", "caption"], margin_top=8, margin_bottom=8))
+            return
+        picture.set_paintable(texture)
+        button.set_sensitive(True)
 
     def _finish(self, column: Gtk.Box, message: dict, mine: bool) -> None:
         self._meta = Gtk.Label(xalign=1 if mine else 0, css_classes=["caption", "dim-label"])
@@ -394,7 +436,7 @@ class ConversationPage(Adw.NavigationPage):
             sender_id = message.get("senderId")
             mine = sender_id == self._controller.me_id
             show_sender = self._is_group and not mine and sender_id != previous
-            self._list.insert(_Bubble(message, mine, self._users.get(sender_id), show_sender, on_link=self._controller.open_link), index)
+            self._list.insert(_Bubble(message, mine, self._users.get(sender_id), show_sender, on_link=self._controller.open_link, load_photo=self._load_photo), index)
             previous = sender_id
 
         def keep_place():
@@ -421,12 +463,25 @@ class ConversationPage(Adw.NavigationPage):
         self._message_ids.add(message["id"])
         sender_id = message.get("senderId")
         mine = sender_id == self._controller.me_id
-        bubble = _Bubble(message, mine, self._users.get(sender_id), show_sender=self._is_group and not mine and sender_id != self._last_sender,
+        bubble = _Bubble(
+            message,
+            mine,
+            self._users.get(sender_id),
+            show_sender=self._is_group and not mine and sender_id != self._last_sender,
             on_link=self._controller.open_link,
+            load_photo=self._load_photo,
         )
         self._last_sender = sender_id
         self._list.append(bubble)
         return bubble
+
+    def _load_photo(self, url: str, callback) -> None:
+        """A DM photo: from the image cache, else downloaded through the sidecar with the session."""
+
+        def fetch(photo_url: str, done) -> None:
+            self._controller.sidecar.call("dm.media", {"url": photo_url}, lambda result, error: done(None if error else base64.b64decode(result["data"])))
+
+        images.load_via(url, fetch, callback)
 
     def _scroll_to_bottom(self) -> None:
         def go():

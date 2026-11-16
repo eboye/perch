@@ -374,6 +374,25 @@ const methods = {
 		return { ok: true };
 	},
 
+	// X's translation of a post into your account's language. { id } -> { text, from, to }
+	'tweet.translate': async ({ id }) => {
+		if (!id) throw new Error('Missing tweet id');
+		if (demoMode) return demo.translate(String(id));
+		requireClient();
+		const url = new URL(
+			`https://x.com/i/api/1.1/strato/column/None/tweetId=${encodeURIComponent(String(id))},destinationLanguage=None,translationSource=Some(Google),feature=None,timeout=None,onlyCached=None/translation/service/translateTweet`,
+		);
+		const res = await signedFetch(client, url);
+		if (!res.ok) throw Object.assign(new Error(`Couldn’t translate the post (HTTP ${res.status})`), { status: res.status });
+		const body = await res.json();
+		if (!body.translation) throw new Error('X has no translation for this post');
+		let text = body.translation;
+		for (const link of body.entities?.urls || []) {
+			if (link.url && link.expanded_url) text = text.split(link.url).join(link.expanded_url);
+		}
+		return { text, from: body.localizedSourceLanguage || body.sourceLanguage || '', to: body.destinationLanguage || '' };
+	},
+
 	// Who liked / reposted a post. { id, kind: 'likers'|'retweeters', cursor? } -> { list: users, next }
 	'tweet.engagers': async ({ id, kind, cursor }) => {
 		if (!id) throw new Error('Missing tweet id');

@@ -5,11 +5,13 @@ from pathlib import Path
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from perch import format as fmt
+from perch import settings
 from perch.tweet_row import quoted_card
 
 MAX_CHARS = 280
 MAX_IMAGES = 4
 MAX_ALT_CHARS = 1000  # X's limit for an image description
+MAX_DRAFTS = 20  # kept per kind of post: new, reply to <id>, quote of <id>
 
 
 class ComposeDialog(Adw.Dialog):
@@ -117,6 +119,19 @@ class ComposeDialog(Adw.Dialog):
         view.add_top_bar(header)
         self.set_child(view)
 
+        # A draft left when this kind of post was last closed without posting.
+        self._sent = False
+        self._draft_key = f"reply:{reply_to['id']}" if reply_to else f"quote:{quote['id']}" if quote else "new"
+        self._draft_info = Gtk.Box(spacing=6, visible=False, css_classes=["schedule-info"])
+        self._draft_info.append(Gtk.Image(icon_name="document-edit-symbolic"))
+        self._draft_info.append(Gtk.Label(label="Restored your draft", xalign=0, hexpand=True))
+        discard = Gtk.Button(label="Discard", css_classes=["flat"])
+        discard.connect("clicked", lambda *_: self._discard_draft())
+        self._draft_info.append(discard)
+        body.prepend(self._draft_info)
+        self._restore_draft()
+        self.connect("closed", lambda *_: self._save_draft())
+
         # Capture phase: the text view would otherwise take Ctrl+Return before it bubbles up here.
         send = Gtk.ShortcutController(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         send.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string("<Control>Return"), Gtk.CallbackAction.new(lambda *_: self._submit() or True)))
@@ -156,6 +171,56 @@ class ComposeDialog(Adw.Dialog):
         if self._schedule_at is None:
             if not busy:
                 self._post.set_label("Post the Rest" if self._thread_parent else "Post All" if self._extras else "Reply" if self._reply_to else "Post")
+
+    # -- drafts -------------------------------------------------------------
+
+    def _restore_draft(self) -> None:
+        draft = (settings.get("drafts") or {}).get(self._draft_key)
+        if not draft:
+            return
+        self._text.get_buffer().set_text(draft.get("text") or "")
+        self._images = [p for p in draft.get("images") or [] if Path(p).is_file()][:MAX_IMAGES]
+        self._alts = {p: a for p, a in (draft.get("alts") or {}).items() if p in self._images}
+        if self._images:
+            self._render_thumbs()
+        for text in draft.get("thread") or []:
+            self._add_extra(text)
+        self.set_focus(self._text)
+        self._draft_info.set_visible(True)
+
+    def _save_draft(self) -> None:
+        """Closed without posting: keep what was written for next time (or forget an empty one)."""
+        if self._sent or self._thread_parent:
+            # Posted, or a thread that went out partway (saving it would post the first part twice).
+            self._forget_draft()
+            return
+        text = self._get_text()
+        thread = [self._extra_text(extra) for extra in self._extras if self._extra_text(extra).strip()]
+        if not text.strip() and not self._images and not thread:
+            self._forget_draft()
+            return
+        drafts = dict(settings.get("drafts") or {})
+        drafts.pop(self._draft_key, None)
+        drafts[self._draft_key] = {"text": text, "images": list(self._images), "alts": dict(self._alts), "thread": thread, "savedAt": GLib.DateTime.new_now_utc().format_iso8601()}
+        while len(drafts) > MAX_DRAFTS:  # oldest first (insertion order)
+            drafts.pop(next(iter(drafts)))
+        settings.set("drafts", drafts)
+
+    def _forget_draft(self) -> None:
+        drafts = dict(settings.get("drafts") or {})
+        if drafts.pop(self._draft_key, None) is not None:
+            settings.set("drafts", drafts)
+
+    def _discard_draft(self) -> None:
+        self._forget_draft()
+        self._text.get_buffer().set_text("")
+        self._images.clear()
+        self._alts.clear()
+        self._render_thumbs()
+        for extra in list(self._extras):
+            self._remove_extra(extra)
+        self._draft_info.set_visible(False)
+        self._text.grab_focus()
 
     # -- thread -------------------------------------------------------------
 
@@ -427,6 +492,7 @@ class ComposeDialog(Adw.Dialog):
             first_id = result.get("id")
             if not self._extras:
                 self._set_busy(False)
+                self._sent = True
                 self.close()
                 self._controller.on_posted(first_id, (self._reply_to or {}).get("id"))
                 return
@@ -443,6 +509,7 @@ class ComposeDialog(Adw.Dialog):
         """Post the thread's further posts in order, each replying to the one before."""
         if not self._extras:
             self._set_busy(False)
+            self._sent = True
             self.close()
             self._controller.on_posted(first_id, (self._reply_to or {}).get("id"))
             return
@@ -484,6 +551,7 @@ class ComposeDialog(Adw.Dialog):
                 self._error.set_title(self._controller.describe_error(error, "Couldn't schedule the post"))
                 self._error.set_revealed(True)
                 return
+            self._sent = True
             self.close()
             self._controller.on_scheduled(at)
 

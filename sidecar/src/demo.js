@@ -48,8 +48,9 @@ function tweet(n, kind, nested = false) {
 		conversationId: id,
 		createdAt: stamp(n * 37 + 2),
 		entities: { hashtags: [], mentionedUsers: [], urls: [] },
-		fullText: `${texts[n % texts.length]}`,
-		lang: 'en',
+		// One post in German on the Following timeline (for Translate Post).
+		fullText: n === 3 && kind === 'following' && !nested ? 'Guten Morgen! Heute baue ich weiter an meiner GTK-App.' : `${texts[n % texts.length]}`,
+		lang: n === 3 && kind === 'following' && !nested ? 'de' : 'en',
 		likeCount: (n * 131) % 2400,
 		quoteCount: n % 4,
 		replyCount: (n * 7) % 90,
@@ -153,6 +154,10 @@ function conversation(id) {
 	messages.splice(1, 0, { id: `${cid}-enc`, senderId: other.id, text: '', createdAt: iso(minutes + 30), isEncrypted: true, mediaUrls: [] });
 	// A message type Perch can't show (no text, no media, not encrypted).
 	if (cid === '1001-1003') messages.push({ id: `${cid}-blank`, senderId: other.id, text: '', createdAt: iso(minutes + 1), isEncrypted: false, mediaUrls: [] });
+	// A photo from the other person (served by dmMedia below).
+	if (cid === '1001-1005') {
+		messages.push({ id: `${cid}-photo`, senderId: other.id, text: 'Here is the poster', createdAt: iso(minutes + 2), isEncrypted: false, mediaUrls: [DEMO_PHOTO_URL] });
+	}
 	// A long conversation: enough recent messages for "Load Earlier Messages" to show.
 	if (cid === '1001-1002') {
 		for (let i = 0; i < 24; i++) {
@@ -236,6 +241,9 @@ function profile(key) {
 	};
 }
 
+// First-page timeline fetches per kind (PERCH_DEMO_GROWING).
+const firstPageFetches = {};
+
 // Muted accounts, kept in memory for the demo session.
 const mutedIds = new Set(['1005']);
 
@@ -247,6 +255,20 @@ function setMuted(id, mute) {
 	if (mute) mutedIds.add(String(id));
 	else mutedIds.delete(String(id));
 	return { ok: true };
+}
+
+// The demo DM photo: a small blue PNG.
+const DEMO_PHOTO_URL = 'https://ton.x.com/i/ton/data/dm/1/2/demo-photo.png';
+const DEMO_PHOTO_PNG =
+	'iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAIAAAAuKetIAAAATklEQVR4nO3PAQkAIADAMBEr2dCoBjHGEbYGW/vc8bM5PidQE6gJ1ARqAjWBmkBNoCZQE6gJ1ARqAjWBmkBNoCZQE6gJ1ARqAjWBmkDtAbsWAgC3nm8oAAAAAElFTkSuQmCC';
+
+function dmMedia() {
+	return { type: 'image/png', data: DEMO_PHOTO_PNG };
+}
+
+// A post's "translation": the original text, marked, from German.
+function translate(id) {
+	return { text: `[Translated] ${details(id).fullText}`, from: 'German', to: 'en' };
 }
 
 // Blocked accounts, kept in memory for the demo session (starts empty).
@@ -372,6 +394,8 @@ function unschedule(id) {
 }
 
 module.exports = {
+	dmMedia,
+	translate,
 	blocked,
 	setBlocked,
 	mentions,
@@ -414,6 +438,12 @@ module.exports = {
 	timeline: (kind, cursor) => {
 		const page = cursor ? Number(cursor) : 0;
 		const list = Array.from({ length: 15 }, (_, i) => tweet(page * 15 + i, kind));
+		// PERCH_DEMO_GROWING=1 (UI tests): every new fetch of the first page has 2 more new posts on top.
+		if (!page && process.env.PERCH_DEMO_GROWING === '1') {
+			const fetches = (firstPageFetches[kind] = (firstPageFetches[kind] || 0) + 1);
+			const fresh = Array.from({ length: (fetches - 1) * 2 }, (_, i) => ({ ...tweet(i, kind), id: String(990000 + i), fullText: `Brand new post ${i + 1}` }));
+			list.unshift(...fresh.reverse());
+		}
 		return { list, next: page < 4 ? String(page + 1) : '' };
 	},
 };

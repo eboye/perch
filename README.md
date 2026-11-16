@@ -4,7 +4,7 @@ A small GTK 4 / libadwaita client for X — timelines, post pages with reply thr
 location, website, photo, header), your likes, highlights, removing followers, muting and blocking people (with
 muted / blocked account lists), who to follow, who reposted a post (and who liked
 your own — X keeps likes private otherwise), search (posts and people), bookmarks, lists, like / repost / quote / bookmark, posting
-and replying with images (with alt text), threads, scheduling posts (and cancelling them), deleting your own posts, swipeable galleries for multi-media posts, an in-app viewer for photos (with zoom), videos and GIFs, notifications (all, or just mentions), direct messages (with an unread filter, images, earlier
+and replying with images (with alt text), threads, drafts, translating posts, scheduling posts (and cancelling them), deleting your own posts, swipeable galleries for multi-media posts, an in-app viewer for photos (with zoom), videos and GIFs, notifications (all, or just mentions), a "new posts" pill on Following, closing to the dock (the window minimizes; Perch keeps running), following the system's light / dark switch live (including theme tools such as Rewaita that rewrite `~/.config/gtk-4.0/gtk.css`), direct messages (with an unread filter, photos, earlier
 history and deleting conversations), keyboard navigation (j / k / l / r, Ctrl+? for the list), desktop notifications (polled every
 2 minutes while the app is open), and listening to Spaces (live and replays) — built on
 [rettiwt-api](https://github.com/Rishikant181/Rettiwt-API) (the same unofficial library
@@ -53,7 +53,8 @@ and posts; 15 s for DMs and notifications; longer for older pages), so moving ar
 refetch from X. Refresh (Ctrl+R / F5, the refresh buttons, Try Again) and the 2-minute poller always
 ask X. Your own likes, reposts and bookmarks are applied to cached copies; other writes drop the
 cached results they affect. If X rate limits or the network is down, Perch shows its last copy (up to
-30 minutes old) and says so. Nothing is cached on disk. Rules and tests: `sidecar/src/cache.js`,
+30 minutes old) and says so. That cache is memory only; downloaded images (avatars, photos, DM
+photos) are kept on disk in `~/.cache/perch/images`, trimmed to 300 MB. Rules and tests: `sidecar/src/cache.js`,
 `npm --prefix sidecar test`.
 
 ## Development

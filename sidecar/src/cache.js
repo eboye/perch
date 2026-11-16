@@ -22,6 +22,7 @@ const TTL = {
 	'tweet.details': 60,
 	'tweet.replies': 60,
 	'tweet.history': 600,
+	'tweet.translate': 86400,
 	'tweet.engagers': 120,
 	'tweet.scheduled': 30,
 	'user.profile': 60,
@@ -75,7 +76,7 @@ const INVALIDATES = {
 	'dm.deleteConversation': DM_READS,
 };
 // Calls that never touch the cache.
-const PASS_THROUGH = new Set(['ping', 'space.details', 'space.stream']);
+const PASS_THROUGH = new Set(['ping', 'space.details', 'space.stream', 'dm.media']);
 
 // like / unlike / retweet / unretweet / bookmark / unbookmark -> [flag, count field, value]
 const TWEET_ACTIONS = {

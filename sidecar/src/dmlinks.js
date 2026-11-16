@@ -1,16 +1,18 @@
 'use strict';
-// Shared links in DMs.
+// Shared links and photos in DMs.
 //
-// X's conversation page sends each message as a Thrift-encoded event. A message that is only a
-// shared link (e.g. a YouTube URL pasted on its own) has no text field: the URL sits in the
-// message's attachment list instead. rettiwt reads only the text field and twimg media, so such a
-// message decodes as empty. This wraps rettiwt's decoder and, for an unencrypted message with no
-// text and no media, puts the attachment's URLs in as its text.
+// X's conversation page sends each message as a Thrift-encoded event. Attachments sit in the
+// message's attachment list, not its text field: a shared link (e.g. a YouTube URL pasted on its
+// own) or a photo (a ton.x.com/i/ton/data/dm/… URL). rettiwt reads only the text field and twimg
+// media, so these decode as empty. This wraps rettiwt's decoder: photo URLs go into mediaUrls, and
+// a message with no text gets its shared links as its text.
 
 const decoder = require('rettiwt-api/dist/helper/DMEventDecoder');
 
 const MEDIA_HOST = /^https?:\/\/(?:video|pbs)\.twimg\.com\//i;
 const URL_START = /^https?:\/\//i;
+// A photo attached to a DM (served only to signed-in members of the conversation).
+const DM_MEDIA = /^https:\/\/ton\.(?:x|twitter)\.com\/(?:i\/ton|1\.1\/ton)\/data\/dm\//i;
 
 // Thrift binary protocol: [type:u8][field id:i16][value], a struct ends with a 0 byte.
 const T_BOOL = 2;
@@ -122,20 +124,27 @@ function sharedLinks(encodedEvent) {
 	for (const [fieldId, value] of message) {
 		if (fieldId !== 1) collectUrls(value, urls);
 	}
-	return urls.length ? { id, urls: [...new Set(urls)] } : null;
+	const unique = [...new Set(urls)];
+	const media = unique.filter((url) => DM_MEDIA.test(url));
+	const links = unique.filter((url) => !DM_MEDIA.test(url));
+	return media.length || links.length ? { id, links, media } : null;
 }
 
-function fillEmptyMessages(events, messages) {
-	const empty = messages.filter((m) => m && !m.text && !m.isEncrypted && !(m.mediaUrls || []).length);
-	if (!empty.length) return messages;
-	const linksById = new Map();
+// For every unencrypted message: attached photos go into mediaUrls; a message with no text that
+// carries a shared link gets the link as its text.
+function fillMessages(events, messages) {
+	const plain = messages.filter((m) => m && !m.isEncrypted);
+	if (!plain.length) return messages;
+	const byId = new Map();
 	for (const event of events) {
 		const found = sharedLinks(event);
-		if (found) linksById.set(found.id, found.urls);
+		if (found) byId.set(found.id, found);
 	}
-	for (const message of empty) {
-		const urls = linksById.get(String(message.id));
-		if (urls) message.text = urls.join('\n');
+	for (const message of plain) {
+		const found = byId.get(String(message.id));
+		if (!found) continue;
+		if (found.media.length) message.mediaUrls = [...new Set([...(message.mediaUrls || []), ...found.media])];
+		if (!message.text && found.links.length) message.text = found.links.join('\n');
 	}
 	return messages;
 }
@@ -146,7 +155,7 @@ function install() {
 	if (installed) return;
 	installed = true;
 	const original = decoder.decodeMessages;
-	decoder.decodeMessages = (events, options) => fillEmptyMessages(events || [], original(events, options));
+	decoder.decodeMessages = (events, options) => fillMessages(events || [], original(events, options));
 }
 
-module.exports = { install, sharedLinks };
+module.exports = { install, sharedLinks, DM_MEDIA };

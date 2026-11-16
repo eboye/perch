@@ -15,7 +15,8 @@ from perch.window import PerchWindow  # noqa: E402
 
 
 class PerchApplication(Adw.Application):
-    """Closing the window only hides it (Perch keeps polling, notifying and playing Spaces);
+    """Closing the window only minimizes it, so Perch stays in the dock (it keeps polling, notifying
+    and playing Spaces; a click on the dock icon brings it back);
     the app ends only through the "quit" action — the dock's right-click Quit (GNOME Shell
     activates app.quit when an app exports it), Ctrl+Q, or Quit in the main menu."""
 
@@ -26,7 +27,7 @@ class PerchApplication(Adw.Application):
         self._main_window: PerchWindow | None = None
         self.connect("shutdown", lambda *_: self.sidecar.stop())
         # `perch --quit` (the desktop file's "Quit Completely" action, shown on the dock icon's
-        # right-click menu even while Perch runs hidden) ends the running instance.
+        # right-click menu) ends the running instance.
         self.add_main_option("quit", 0, GLib.OptionFlags.NONE, GLib.OptionArg.NONE, "Quit the running Perch completely", None)
 
     def do_handle_local_options(self, options: GLib.VariantDict) -> int:
@@ -55,8 +56,9 @@ class PerchApplication(Adw.Application):
         display = Gdk.Display.get_default()
         Gtk.StyleContext.add_provider_for_display(display, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         Gtk.IconTheme.get_for_display(display).add_search_path(str(Path(__file__).with_name("icons")))
+        self._watch_user_css(display)
 
-        # Stay alive while the window is hidden; released again in _quit().
+        # Stay alive however the window is closed; released again in _quit().
         self.hold()
 
         for name, handler, accels in (
@@ -68,7 +70,7 @@ class PerchApplication(Adw.Application):
             self.add_action(action)
             self.set_accels_for_action(f"app.{name}", accels)
 
-        # Ctrl+W hides the window (GtkWindow's built-in close action, which goes through close-request).
+        # Ctrl+W minimizes to the dock (GtkWindow's built-in close action, which goes through close-request).
         self.set_accels_for_action("window.close", ["<Control>w"])
 
         # Target of desktop notifications: brings the window up on the given tab.
@@ -84,10 +86,43 @@ class PerchApplication(Adw.Application):
         self.add_action(restart)
         self.updates.start()
 
+    def _watch_user_css(self, display: Gdk.Display) -> None:
+        """Re-apply ~/.config/gtk-4.0/gtk.css (and what it imports) whenever it changes.
+
+        GTK reads that file only at start-up. Theming tools such as Rewaita rewrite it, with light or
+        dark colours, when the system switches between light and dark; Perch keeps running in the
+        dock, so without this it would keep the colours from when it started. A copy is loaded just
+        above GTK's own (stale) one and reloaded on every change in that folder."""
+        folder = Path(GLib.get_user_config_dir()) / "gtk-4.0"
+        self._user_css = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_display(display, self._user_css, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+        self._user_css_reload = 0
+
+        def reload() -> bool:
+            self._user_css_reload = 0
+            css_file = folder / "gtk.css"
+            if css_file.is_file():
+                self._user_css.load_from_path(str(css_file))
+            else:
+                self._user_css.load_from_string("")
+            return GLib.SOURCE_REMOVE
+
+        def changed(*_args) -> None:
+            # A theme tool writes several files in a row: reload once they're done.
+            if self._user_css_reload:
+                GLib.source_remove(self._user_css_reload)
+            self._user_css_reload = GLib.timeout_add(250, reload)
+
+        try:
+            self._user_css_monitor = Gio.File.new_for_path(str(folder)).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
+            self._user_css_monitor.connect("changed", changed)
+        except GLib.Error as err:
+            print(f"[perch] can't watch {folder}: {err.message}")
+
     def _on_update_available(self) -> None:
         window = self._window()
         window.show_update_banner()
-        if not window.get_visible():
+        if not window.is_on_screen():
             notification = Gio.Notification.new("Perch was updated")
             notification.set_body("Restart Perch to use the new version.")
             notification.set_icon(Gio.ThemedIcon.new(APP_ID))
@@ -102,7 +137,7 @@ class PerchApplication(Adw.Application):
         return self._main_window
 
     def do_activate(self):
-        # Also what a dock click on the running app ends up calling: re-show the hidden window.
+        # Also what launching Perch again ends up calling: bring the (minimized) window back.
         self._window().present()
         # Coming back to Perch is when a fresh install matters; don't wait for the portal's poll.
         if hasattr(self, "updates"):

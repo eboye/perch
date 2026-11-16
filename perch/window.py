@@ -64,6 +64,10 @@ class PerchWindow(Adw.ApplicationWindow):
         self._install_actions()
         self.connect("close-request", self._on_close_request)
         self.connect("notify::visible", lambda *_: self._maybe_mark_inbox_seen())
+        # Minimized to the dock and back: the window stays "visible"; X11 reports it in the surface
+        # state, GNOME on Wayland as "suspended".
+        self.connect("realize", lambda *_: self.get_surface().connect("notify::state", self._on_surface_state))
+        self.connect("notify::suspended", self._on_surface_state)
         self._start()
 
     # -- pages --------------------------------------------------------------
@@ -189,12 +193,27 @@ class PerchWindow(Adw.ApplicationWindow):
     def _on_close_request(self, _window) -> bool:
         if getattr(self.get_application(), "quitting", True):
             return False  # a real quit: let the window close
-        # Hide instead of closing. Videos in the viewer stop; Space audio keeps playing on purpose.
+        # Minimize instead of closing, so Perch stays in the dock (a hidden window drops out of it)
+        # and a click on its icon brings it back. Videos in the viewer stop; Space audio keeps
+        # playing on purpose.
         page = self._nav.get_visible_page()
         if isinstance(page, MediaViewer):
             self._nav.pop()
-        self.set_visible(False)
+        self.minimize()
         return True
+
+    def is_on_screen(self) -> bool:
+        """Shown and not minimized: only then has the user seen what's in the window. On Wayland GTK
+        isn't told about minimizing; GNOME marks a minimized window *suspended* instead."""
+        if not self.get_visible() or self.is_suspended():
+            return False
+        surface = self.get_surface()
+        return not (surface is not None and surface.get_state() & Gdk.ToplevelState.MINIMIZED)
+
+    def _on_surface_state(self, *_args) -> None:
+        # Back from the dock: what's on screen now counts as seen.
+        self._maybe_mark_inbox_seen()
+        self._maybe_mark_seen()
 
     def show_update_banner(self) -> None:
         """A newer Perch is installed: a banner on the main view, plus a toast that shows on
@@ -744,7 +763,7 @@ class PerchWindow(Adw.ApplicationWindow):
         """While the Messages tab is actually on screen, clear X's DM badge up to the newest event."""
         inbox = self._views["messages"]
         newest, seen = inbox.newest_event_id, inbox.last_seen_event_id
-        if not (self.get_visible() and self._signed_in() and self._current_tab() == "messages" and newest):
+        if not (self.is_on_screen() and self._signed_in() and self._current_tab() == "messages" and newest):
             return
         if seen and str(seen).isdigit() and str(newest).isdigit() and int(seen) >= int(newest):
             return
@@ -795,13 +814,22 @@ class PerchWindow(Adw.ApplicationWindow):
         self._maybe_mark_seen()
         self._maybe_mark_inbox_seen()
 
+    def timeline_loaded(self, kind: str) -> bool:
+        return self._signed_in() and self._views[kind].loaded_once
+
+    def on_timeline_polled(self, kind: str, items: list[dict]) -> None:
+        """The poller fetched the timeline's first page: offer posts newer than what's shown."""
+        view = self._views[kind]
+        if view.loaded_once:
+            view.offer_new_posts(view.count_new(items))
+
     def on_notifications_loaded(self) -> None:
         """The All list loaded: if it's on screen, its newest notification counts as seen."""
         self._maybe_mark_seen()
 
     def _maybe_mark_seen(self) -> None:
         view = self._views["notifications"]
-        if self._current_tab() == "notifications" and view.get_visible_child_name() == "list":
+        if self.is_on_screen() and self._current_tab() == "notifications" and view.get_visible_child_name() == "list":
             view.mark_seen()
             page = self._stack.get_page(view)
             page.set_badge_number(0)

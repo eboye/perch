@@ -74,6 +74,7 @@ const byTime = (a, b) => new Date(a.createdAt) - new Date(b.createdAt);
 const DM_IMAGE_TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 const DM_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const UPLOAD_URL = 'https://upload.x.com/i/media/upload.json';
+const DM_MEDIA_MAX_BYTES = 15 * 1024 * 1024;
 
 function checkDmImage(path) {
 	const type = DM_IMAGE_TYPES[extname(String(path)).toLowerCase()];
@@ -270,6 +271,21 @@ function methods({ requireClient, demoMode }) {
 				participants: conversation.participants,
 				users,
 			};
+		},
+
+		// A photo attached to a DM. X serves these only to signed-in members of the conversation, so
+		// it's fetched here with the session. Only X's DM media URLs are accepted: the session's
+		// cookies must never go to any other host. { url } -> { type, data (base64) }
+		'dm.media': async ({ url }) => {
+			if (!dmlinks.DM_MEDIA.test(String(url || ''))) throw new Error('Not a DM image');
+			if (demoMode) return demo.dmMedia();
+			const res = await signedFetch(requireClient(), new URL(url));
+			if (!res.ok) throw Object.assign(new Error(`Couldn’t load the image (HTTP ${res.status})`), { status: res.status });
+			const type = res.headers.get('content-type') || '';
+			if (!type.startsWith('image/')) throw new Error('X did not return an image');
+			const bytes = Buffer.from(await res.arrayBuffer());
+			if (bytes.length > DM_MEDIA_MAX_BYTES) throw new Error('The image is too large to show');
+			return { type, data: bytes.toString('base64') };
 		},
 
 		// Messages older than `before` (a message id), from X's REST conversation history, which pages
