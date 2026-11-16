@@ -62,15 +62,15 @@ Timelines, notifications, direct messages and Spaces — in a fast, keyboard-fri
 
 <table>
   <tr>
-    <td><img src="data/screenshots/polls.png" alt="A poll with results"></td>
-    <td><img src="data/screenshots/notifications-dark.png" alt="Grouped notifications in dark mode"></td>
+    <td width="50%"><img src="data/screenshots/polls.png" width="100%" alt="A poll with results"></td>
+    <td width="50%"><img src="data/screenshots/notifications-dark.png" width="100%" alt="Grouped notifications in dark mode"></td>
   </tr>
   <tr>
     <td align="center">Polls</td>
     <td align="center">Notifications</td>
   </tr>
   <tr>
-    <td colspan="2"><img src="data/screenshots/messages-dark.png" alt="A direct message conversation in dark mode"></td>
+    <td colspan="2" align="center"><img src="data/screenshots/messages-dark.png" width="70%" alt="A direct message conversation in dark mode"></td>
   </tr>
   <tr>
     <td colspan="2" align="center">Direct messages</td>
