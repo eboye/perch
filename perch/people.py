@@ -1,9 +1,17 @@
-"""A page listing people: a profile's followers / following, or who liked / reposted a post."""
+"""A page listing people: a profile's followers / following, who liked / reposted a post, your
+muted accounts, or who X suggests following."""
 
 from gi.repository import Adw, Gtk
 
 from perch.paged_list import PagedListView
 from perch.search import UserRow
+
+
+def _pill(label: str, tooltip: str) -> Gtk.Button:
+    button = Gtk.Button(label=label, tooltip_text=tooltip)
+    button.add_css_class("pill")
+    button.add_css_class("small-pill")
+    return button
 
 
 class _PeopleView(PagedListView):
@@ -25,13 +33,44 @@ class _PeopleView(PagedListView):
 
     def make_row(self, item: dict, page: dict) -> UserRow:
         row = UserRow(item, self._controller.me_id)
-        if self._removable and item.get("id") != self._controller.me_id:
-            remove = Gtk.Button(label="Remove", tooltip_text=f"Remove @{item.get('userName', '')} from your followers")
-            remove.add_css_class("pill")
-            remove.add_css_class("small-pill")
+        handle = item.get("userName", "")
+        if item.get("id") == self._controller.me_id:
+            return row
+        if self._removable:
+            remove = _pill("Remove", f"Remove @{handle} from your followers")
             remove.connect("clicked", lambda *_: self._confirm_remove(row))
             row.add_suffix(remove)
+        elif self._method == "user.muted":
+            unmute = _pill("Unmute", f"Show @{handle}’s posts again")
+            unmute.connect("clicked", lambda button: (button.set_sensitive(False), self._controller.set_muted(row.user, False)))
+            row.add_suffix(unmute)
+        elif self._method == "user.suggestions":
+            follow = _pill("Follow", f"Follow @{handle}")
+            follow.add_css_class("suggested-action")
+            follow.connect("clicked", lambda button: self._toggle_follow(row, button))
+            row.add_suffix(follow)
         return row
+
+    def _toggle_follow(self, row: UserRow, button: Gtk.Button) -> None:
+        user = row.user
+        follow = not user.get("youFollow")
+        handle = user.get("userName", "")
+
+        def show(following: bool) -> None:
+            user["youFollow"] = following
+            button.set_label("Following" if following else "Follow")
+            button.set_tooltip_text(f"Unfollow @{handle}" if following else f"Follow @{handle}")
+            (button.remove_css_class if following else button.add_css_class)("suggested-action")
+
+        def done(_result, error):
+            button.set_sensitive(True)
+            if error:
+                show(not follow)
+                self._controller.report_error(error, f"Couldn't {'follow' if follow else 'unfollow'} @{handle}")
+
+        show(follow)  # optimistic
+        button.set_sensitive(False)
+        self._controller.sidecar.call("user.follow", {"id": user["id"], "follow": follow}, done)
 
     def on_row_activated(self, row: UserRow) -> None:
         self._controller.open_profile(row.user)
@@ -66,7 +105,8 @@ class _PeopleView(PagedListView):
 
 
 class PeoplePage(Adw.NavigationPage):
-    """``method`` / ``params`` name the sidecar call (``user.connections`` or ``tweet.engagers``)."""
+    """``method`` / ``params`` name the sidecar call (``user.connections``, ``tweet.engagers``,
+    ``user.muted`` or ``user.suggestions``)."""
 
     def __init__(self, controller, tag: str, title: str, subtitle: str, method: str, params: dict, empty_title: str):
         super().__init__(title=title, tag=tag)

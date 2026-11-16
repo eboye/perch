@@ -195,6 +195,14 @@ function methods({ requireClient, demoMode }) {
 			};
 		},
 
+		// Delete a conversation from your inbox (the other people in it keep their copy). { id } -> { ok }
+		'dm.deleteConversation': async ({ id }) => {
+			if (!id) throw new Error('Missing conversation id');
+			if (demoMode) return { ok: true };
+			await requireClient().dm.deleteConversation(String(id));
+			return { ok: true };
+		},
+
 		// { conversationId, text } -> { id, createdAt }
 		'dm.send': async ({ conversationId, text }) => {
 			if (!conversationId) throw new Error('Missing conversation id');

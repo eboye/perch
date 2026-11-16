@@ -199,15 +199,35 @@ function profile(key) {
 		youFollow: user.id === '1002',
 		followsYou: user.id !== '1004',
 		protected: false,
+		muted: mutedIds.has(user.id),
+		highlightCount: user.id === '1003' ? 12 : 0,
 	};
+}
+
+// Muted accounts, kept in memory for the demo session.
+const mutedIds = new Set(['1005']);
+
+function muted() {
+	return { list: [...mutedIds].map((id) => profile(id)), next: '' };
+}
+
+function setMuted(id, mute) {
+	if (mute) mutedIds.add(String(id));
+	else mutedIds.delete(String(id));
+	return { ok: true };
+}
+
+// Who to follow: the demo accounts you don't follow (and aren't you).
+function suggestions() {
+	return { list: users.slice(1).map((u) => profile(u.id)).filter((u) => !u.youFollow), next: '' };
 }
 
 function userPosts(id, kind, cursor) {
 	const page = cursor ? Number(cursor) : 0;
-	// Likes are posts by other people; everything else is by the profile's owner.
+	// Likes are posts by other people; everything else (highlights too) is by the profile's owner.
 	const by = kind === 'likes' ? null : users.find((u) => u.id === String(id)) || users[1];
 	const list = Array.from({ length: 10 }, (_, i) => {
-		const t = tweet(page * 10 + i + ({ replies: 40, media: 80, likes: 120 }[kind] || 0), 'following', true);
+		const t = tweet(page * 10 + i + ({ replies: 40, media: 80, likes: 120, highlights: 160 }[kind] || 0), 'following', true);
 		return by ? { ...t, tweetBy: by, url: `https://x.com/${by.userName}/status/${t.id}` } : t;
 	});
 	return { list, next: page < 1 ? String(page + 1) : '' };
@@ -296,6 +316,9 @@ function unschedule(id) {
 }
 
 module.exports = {
+	muted,
+	setMuted,
+	suggestions,
 	bookmarks,
 	history,
 	scheduled,

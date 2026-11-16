@@ -32,7 +32,8 @@ def link_to_profile(widget: Gtk.Widget, user: dict, controller) -> None:
 
 
 def _post_menu(tweet: dict, controller, on_deleted) -> Gtk.MenuButton:
-    """The ⋯ button on a post: copy its link, open it in the browser, delete it (your own posts)."""
+    """The ⋯ button on a post: copy its link, open it in the browser, delete it (your own posts) or
+    mute its author (anyone else's)."""
     # The button sits at the row's right edge: align the popover's end with it so it opens
     # leftwards instead of running off the window.
     popover = Gtk.Popover(has_arrow=True, halign=Gtk.Align.END)
@@ -51,8 +52,11 @@ def _post_menu(tweet: dict, controller, on_deleted) -> Gtk.MenuButton:
     if url:
         item("Copy Link", lambda: (Gdk.Display.get_default().get_clipboard().set(url), controller.toast("Link copied")))
         item("Open in Browser", lambda: Gtk.UriLauncher(uri=url).launch(menu.get_root(), None, None, None))
-    if (tweet.get("tweetBy") or {}).get("id") == controller.me_id:
+    author = tweet.get("tweetBy") or {}
+    if author.get("id") == controller.me_id:
         item("Delete Post…", lambda: controller.delete_post(tweet, on_deleted), destructive=True)
+    elif author.get("id") and author.get("userName") and hasattr(controller, "set_muted"):
+        item(f"Mute @{author['userName']}", lambda: controller.set_muted(author, True))
     popover.set_child(box)
 
     menu = Gtk.MenuButton(icon_name="view-more-symbolic", popover=popover, tooltip_text="More", valign=Gtk.Align.CENTER)
@@ -521,6 +525,8 @@ class TweetRow(Gtk.ListBoxRow):
         self.tweet_id = tweet.get("id")
         self._controller = controller
         user = shown.get("tweetBy") or {}
+        # Who this row is "from": the author, and the reposter for a repost (muting either hides it).
+        self.author_ids = {i for i in (user.get("id"), (tweet.get("tweetBy") or {}).get("id")) if i}
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         if tweet.get("retweetedTweet"):

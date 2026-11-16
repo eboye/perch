@@ -104,6 +104,10 @@ const methods = {
 			const data = await users.likes(20, cursor || undefined);
 			return { list: data.list.map(serializeTweet), next: data.next };
 		}
+		if (kind === 'highlights') {
+			const data = await users.highlights(String(id), 20, cursor || undefined);
+			return { list: data.list.map(serializeTweet), next: data.list.length ? data.next : '' };
+		}
 		const fetcher = { replies: users.replies, media: users.media }[kind] || users.timeline;
 		const data = await fetcher.call(users, String(id), 20, cursor || undefined);
 		return { list: data.list.map(serializeTweet), next: data.next };
@@ -116,6 +120,37 @@ const methods = {
 		const ok = await requireClient().user.removeFollower(String(id));
 		if (!ok) throw new Error('X did not confirm removing the follower');
 		return { ok: true };
+	},
+
+	// Mute or unmute someone: their posts stop showing in your timelines and they aren't told.
+	// rettiwt only mutes lists, so this posts to the web client's v1.1 endpoint. { id, mute } -> { ok }
+	'user.mute': async ({ id, mute }) => {
+		if (!id) throw new Error('Missing user id');
+		if (demoMode) return demo.setMuted(String(id), Boolean(mute));
+		const action = mute ? 'create' : 'destroy';
+		await postForm(`https://x.com/i/api/1.1/mutes/users/${action}.json`, new URLSearchParams({ user_id: String(id) }));
+		return { ok: true };
+	},
+
+	// Accounts you've muted, most recent first. { cursor? } -> { list: users, next }
+	'user.muted': async ({ cursor }) => {
+		if (demoMode) return demo.muted();
+		requireClient();
+		const url = new URL('https://x.com/i/api/1.1/mutes/users/list.json');
+		url.search = new URLSearchParams({ count: '40', skip_status: '1', include_entities: 'true', cursor: cursor || '-1' });
+		const res = await signedFetch(client, url);
+		if (!res.ok) throw Object.assign(new Error(`Couldn’t load muted accounts (HTTP ${res.status})`), { status: res.status });
+		const body = await res.json();
+		const next = body.next_cursor_str && body.next_cursor_str !== '0' ? body.next_cursor_str : '';
+		return { list: (body.users || []).map(serializeLegacyUser), next };
+	},
+
+	// Accounts X suggests following (its Connect tab). {} -> { list: users, next }
+	'user.suggestions': async () => {
+		if (demoMode) return demo.suggestions();
+		const data = await requireClient().user.suggestions();
+		const list = data.list.map(serializeUser).filter((u) => !u.youFollow);
+		return { list, next: '' };
 	},
 
 	// Edit your profile. Only the fields present are sent; an empty string clears that field
@@ -468,7 +503,35 @@ function serializeUser(user) {
 		if (out.description && link.url && link.expanded_url) out.description = out.description.split(link.url).join(link.expanded_url);
 	}
 	out.protected = Boolean(legacy.protected ?? user.raw?.privacy?.protected);
+	out.muted = Boolean(user.raw?.relationship_perspectives?.muting ?? legacy.muting);
+	out.highlightCount = Number(user.raw?.highlights_info?.highlighted_tweets) || 0;
 	return out;
+}
+
+// A user from a v1.1 REST endpoint (e.g. the muted list), in the same shape as serializeUser.
+function serializeLegacyUser(u) {
+	let description = u.description || '';
+	for (const link of u.entities?.description?.urls || []) {
+		if (link.url && link.expanded_url) description = description.split(link.url).join(link.expanded_url);
+	}
+	return {
+		id: String(u.id_str || u.id),
+		userName: u.screen_name,
+		fullName: u.name,
+		description,
+		location: u.location || '',
+		profileImage: u.profile_image_url_https || null,
+		profileBanner: u.profile_banner_url || null,
+		isVerified: Boolean(u.verified || u.is_blue_verified),
+		followersCount: u.followers_count || 0,
+		followingsCount: u.friends_count || 0,
+		statusesCount: u.statuses_count || 0,
+		createdAt: u.created_at || null,
+		youFollow: Boolean(u.following),
+		followsYou: Boolean(u.followed_by),
+		protected: Boolean(u.protected),
+		muted: u.muting ?? true,
+	};
 }
 
 // List: add privacy, the owner's handle/name and a banner image from the raw payload.

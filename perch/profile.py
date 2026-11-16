@@ -1,6 +1,7 @@
-"""User profile page: banner, avatar, bio, counts, follow button and Posts / Replies / Media tabs."""
+"""User profile page: banner, avatar, bio, counts, follow / mute and Posts / Replies / Media
+(+ Highlights, and Likes on your own) tabs."""
 
-from gi.repository import Adw, GLib, Gtk, Pango
+from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from perch import format as fmt
 from perch import images
@@ -33,7 +34,9 @@ class _ProfilePostsView(PagedListView):
 
     @property
     def empty_label(self) -> str:  # noqa: D401 - read by PagedListView
-        return {"replies": "No replies yet", "media": "No photos or videos yet", "likes": "No likes yet"}.get(self.kind, "No posts yet")
+        return {"replies": "No replies yet", "media": "No photos or videos yet", "likes": "No likes yet", "highlights": "No highlights"}.get(
+            self.kind, "No posts yet"
+        )
 
     def set_kind(self, kind: str) -> None:
         if kind != self.kind:
@@ -140,6 +143,7 @@ class ProfilePage(Adw.NavigationPage):
         action_row.append(lists)
         self._follow_button = self._build_follow_button(user)
         if self._follow_button:
+            action_row.prepend(self._build_more_menu(user))
             action_row.append(self._follow_button)
         elif user.get("id") == self._controller.me_id:
             edit = Gtk.Button(label="Edit Profile", valign=Gtk.Align.CENTER, css_classes=["pill"])
@@ -171,6 +175,8 @@ class ProfilePage(Adw.NavigationPage):
         handle_row.append(Gtk.Label(label=f"@{self.handle}", xalign=0, css_classes=["dim-label"]))
         if user.get("followsYou") and user.get("id") != self._controller.me_id:
             handle_row.append(Gtk.Label(label="Follows you", css_classes=["follows-you", "caption"]))
+        if user.get("muted"):
+            handle_row.append(Gtk.Label(label="Muted", tooltip_text="Their posts are hidden from your timelines", css_classes=["follows-you", "caption"]))
         info.append(handle_row)
 
         if user.get("description"):
@@ -215,12 +221,36 @@ class ProfilePage(Adw.NavigationPage):
     def _build_tabs(self) -> Gtk.Widget:
         group = Adw.ToggleGroup(halign=Gtk.Align.CENTER, margin_top=14, margin_bottom=6)
         group.add_css_class("round")
-        own = (self.user or {}).get("id") == self._controller.me_id
-        for name, label in OWN_TABS if own else TABS:
+        user = self.user or {}
+        own = user.get("id") == self._controller.me_id
+        tabs = list(OWN_TABS if own else TABS)
+        # Highlights (posts the account pinned to its Highlights tab, an X Premium feature).
+        if user.get("highlightCount"):
+            tabs.insert(3, ("highlights", "Highlights"))
+        names = {name for name, _label in tabs}
+        for name, label in tabs:
             group.add(Adw.Toggle(name=name, label=label))
-        group.set_active_name(self._posts.kind if self._posts else "posts")
+        current = self._posts.kind if self._posts else "posts"
+        if current not in names and self._posts:
+            self._posts.set_kind(current := "posts")
+        group.set_active_name(current)
         group.connect("notify::active-name", lambda g, _p: self._posts.set_kind(g.get_active_name()))
         return group
+
+    def _build_more_menu(self, user: dict) -> Gtk.MenuButton:
+        """⋯ on someone else's profile: mute / unmute."""
+        menu = Gio.Menu()
+        muted = bool(user.get("muted"))
+        menu.append(f"Unmute @{self.handle}" if muted else f"Mute @{self.handle}", "profile.mute")
+        actions = Gio.SimpleActionGroup()
+        mute = Gio.SimpleAction.new("mute", None)
+        mute.connect("activate", lambda *_: self.user and self._controller.set_muted(self.user, not self.user.get("muted")))
+        actions.add_action(mute)
+        button = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="More", menu_model=menu, valign=Gtk.Align.CENTER)
+        button.add_css_class("circular")
+        # On the button itself: its popover menu always finds the action there.
+        button.insert_action_group("profile", actions)
+        return button
 
     # -- follow -----------------------------------------------------------------
 

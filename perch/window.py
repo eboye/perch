@@ -164,6 +164,10 @@ class PerchWindow(Adw.ApplicationWindow):
             account.append("Lists", "win.lists")
             account.append("Scheduled Posts", "win.scheduled")
             self._menu.append_section(None, account)
+            people = Gio.Menu()
+            people.append("Who to Follow", "win.suggestions")
+            people.append("Muted Accounts", "win.muted")
+            self._menu.append_section(None, people)
         actions = Gio.Menu()
         actions.append("Open Space…", "win.open-space")
         actions.append("Desktop Notifications", "win.desktop-notifications")
@@ -212,6 +216,8 @@ class PerchWindow(Adw.ApplicationWindow):
             ("bookmarks", lambda: self.open_bookmarks()),
             ("lists", lambda: self.open_lists()),
             ("scheduled", lambda: self.open_scheduled()),
+            ("suggestions", lambda: self.open_suggestions()),
+            ("muted", lambda: self.open_muted()),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
@@ -374,6 +380,74 @@ class PerchWindow(Adw.ApplicationWindow):
             f"{kind}-{tweet['id']}",
             lambda: PeoplePage(self, f"{kind}-{tweet['id']}", title, f"Post by @{handle}", "tweet.engagers", {"id": tweet["id"], "kind": kind}, empty),
         )
+
+    def open_suggestions(self) -> None:
+        self._push_unique(
+            "suggestions",
+            lambda: PeoplePage(self, "suggestions", "Who to Follow", "Suggested by X", "user.suggestions", {}, "No suggestions right now"),
+        )
+
+    def open_muted(self) -> None:
+        self._push_unique(
+            "muted",
+            lambda: PeoplePage(self, "muted", "Muted Accounts", "Their posts are hidden from your timelines", "user.muted", {}, "You haven’t muted anyone"),
+        )
+
+    def set_muted(self, user: dict, mute: bool, undoable: bool = True) -> None:
+        """Mute or unmute someone on X. Muting hides their posts already loaded in the timelines;
+        either way a toast offers to undo it."""
+        if not self._signed_in() or not user.get("id"):
+            return
+        handle = user.get("userName", "")
+
+        def done(_result, error):
+            if error:
+                self.report_error(error, f"Couldn't {'mute' if mute else 'unmute'} @{handle}")
+                return
+            user["muted"] = mute
+            if mute:
+                for name in ("following", "foryou"):
+                    self._views[name].hide_rows(lambda row: user["id"] in getattr(row, "author_ids", ()))
+            for tag in ("muted", f"profile-{handle.lower()}"):
+                if (page := self._nav.find_page(tag)) is not None:
+                    page.reload()
+            toast = Adw.Toast(title=GLib.markup_escape_text(f"Muted @{handle}" if mute else f"Unmuted @{handle}"), timeout=5)
+            if undoable:
+                toast.set_button_label("Undo")
+                toast.connect("button-clicked", lambda *_: self.set_muted(user, not mute, undoable=False))
+            self._toasts.add_toast(toast)
+
+        self._sidecar.call("user.mute", {"id": user["id"], "mute": mute}, done)
+
+    def delete_conversation(self, conversation_id: str, title: str) -> None:
+        """Confirm, then delete a DM conversation from your inbox."""
+        if not self._signed_in() or not conversation_id:
+            return
+        dialog = Adw.AlertDialog(
+            heading="Delete conversation?",
+            body=f"Your conversation with {title} will be removed from your inbox. The other people in it keep their copy.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def done(_result, error):
+            if error:
+                self.report_error(error, "Couldn't delete the conversation")
+                return
+            self._views["messages"].remove_conversation(conversation_id)
+            if self._nav.find_page(f"dm-{conversation_id}") is not None:
+                self._nav.pop_to_tag("home")
+            self.toast("Conversation deleted")
+
+        def on_response(_dialog, response):
+            if response == "delete":
+                self._sidecar.call("dm.deleteConversation", {"id": conversation_id}, done)
+
+        dialog.connect("response", on_response)
+        dialog.present(self)
 
     def open_edit_history(self, tweet: dict) -> None:
         if tweet.get("id"):

@@ -163,5 +163,13 @@ class PagedListView(Gtk.Stack):
         if position == Gtk.PositionType.BOTTOM:
             self.load_more()
 
+    def hide_rows(self, predicate) -> None:
+        """Hide the loaded rows ``predicate(row)`` picks (e.g. posts by someone you just muted)."""
+        index = 0
+        while row := self._list.get_row_at_index(index):
+            if predicate(row):
+                row.set_visible(False)
+            index += 1
+
     def scroll_to_top(self) -> None:
         self._scroller.get_vadjustment().set_value(0)

@@ -1,6 +1,6 @@
 """Direct messages: inbox list (a tab) and a conversation page pushed on the window's NavigationView."""
 
-from gi.repository import Adw, GLib, Gtk, Pango
+from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from perch import format as fmt
 from perch import images
@@ -136,6 +136,17 @@ class InboxView(PagedListView):
                 return
             index += 1
 
+    def remove_conversation(self, conversation_id: str) -> None:
+        index = 0
+        while row := self._list.get_row_at_index(index):
+            if row.conversation.get("id") == conversation_id:
+                self._list.remove(row)
+                break
+            index += 1
+        if self._list.get_row_at_index(0) is None:
+            self.set_visible_child_name("empty")
+        self._recount()
+
     def _recount(self) -> None:
         count, index = 0, 0
         while row := self._list.get_row_at_index(index):
@@ -188,6 +199,15 @@ class ConversationPage(Adw.NavigationPage):
         self._marked_read: str | None = None
 
         header = Adw.HeaderBar(title_widget=Adw.WindowTitle(title=title, subtitle=subtitle))
+        menu = Gio.Menu()
+        menu.append("Delete Conversation…", "conversation.delete")
+        more = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="More", menu_model=menu)
+        actions = Gio.SimpleActionGroup()
+        delete = Gio.SimpleAction.new("delete", None)
+        delete.connect("activate", lambda *_: controller.delete_conversation(self.conversation_id, title))
+        actions.add_action(delete)
+        more.insert_action_group("conversation", actions)
+        header.pack_end(more)
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh")
         refresh.connect("clicked", lambda *_: self.reload())
         header.pack_end(refresh)
