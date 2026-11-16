@@ -456,7 +456,14 @@ function unschedule(id) {
 	return { ok: true };
 }
 
+// UI tests: "X can't be reached" while the file named by PERCH_DEMO_OFFLINE_FILE exists.
+function offline() {
+	const flag = process.env.PERCH_DEMO_OFFLINE_FILE;
+	return Boolean(flag) && require('fs').existsSync(flag);
+}
+
 module.exports = {
+	offline,
 	signIn,
 	react,
 	mutedWords,

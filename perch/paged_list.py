@@ -35,6 +35,8 @@ class PagedListView(Gtk.Stack):
         self._loading = False
         self._retry_first = False
         self._generation = 0  # bumps on reload so stale responses are dropped
+        self._reload_for_more = False  # a saved copy without its cursor: Load More reloads (see restore)
+        self._last_anchor: dict | None = None  # the post at the top of the screen when last looked
         self.loaded_once = False
 
         spinner = Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, width_request=32, height_request=32)
@@ -111,14 +113,102 @@ class PagedListView(Gtk.Stack):
         self._seen.clear()
         self._loading = False
         self._retry_first = False
+        self._reload_for_more = False
+        self._last_anchor = None
         while row := self._list.get_row_at_index(0):
             self._list.remove(row)
             release(row)  # free it (see lifecycle.py)
         self.set_visible_child_name("list" if self.always_show_list else "loading")
         self._fetch()
 
+    # -- saved copies (timelines; see snapshot.py) ------------------------------------
+
+    def restore(self, saved: dict) -> None:
+        """Show a saved copy instead of loading: its posts, scrolled back to where you were."""
+        self._new_posts.set_visible(False)
+        self._generation += 1
+        self._seen.clear()
+        self._loading = False
+        self._retry_first = False
+        while row := self._list.get_row_at_index(0):
+            self._list.remove(row)
+            release(row)
+        self.loaded_once = True
+        for item in saved.get("items") or []:
+            key = self.item_id(item)
+            if not key or key in self._seen:
+                continue
+            self._seen.add(key)
+            row = self.make_row(item, saved)
+            self._list.append(row)
+            self._filter_row(row)
+        self._cursor = saved.get("next") or None
+        # Saved without the cursor after it (the copy was cut short): "Load More" starts over.
+        self._reload_for_more = self._cursor is None
+        self._footer.set_visible_child_name("more")
+        self._end_label.set_label(self.end_label)
+        self.set_visible_child_name("list" if self._list.get_row_at_index(0) else "loading")
+        self._last_anchor = saved.get("anchor") or None
+        if anchor := saved.get("anchor"):
+            self._keep_anchor(str(anchor.get("id")), float(anchor.get("offset") or 0))
+
+    def saved_state(self, limit: int) -> tuple[list[dict], str | None, dict | None]:
+        """(items, cursor after them, anchor) to save: the loaded posts, newest first, up to ``limit``
+        (more if that's what it takes to reach the post at the top of the screen)."""
+        rows, index = [], 0
+        while row := self._list.get_row_at_index(index):
+            if hasattr(row, "item"):
+                rows.append(row)
+            index += 1
+        # Off screen (another tab), rows have no position: keep the place from when it was shown.
+        anchor = self._last_anchor
+        if (top := self.first_row_on_screen()) is not None and hasattr(top, "item"):
+            ok, point = top.compute_point(self._scroller, Graphene.Point().init(0, 0))
+            anchor = self._last_anchor = {"id": self.item_id(top.item), "offset": round(point.y if ok else 0)}
+        if anchor:
+            index = next((i for i, row in enumerate(rows) if self.item_id(row.item) == anchor["id"]), None)
+            if index is None:
+                anchor = None
+            else:
+                limit = max(limit, index + 30)
+        kept = rows[:limit]
+        cursor = self._cursor if len(kept) == len(rows) and not self._reload_for_more else None
+        return [row.item for row in kept], cursor, anchor
+
+    def _keep_anchor(self, anchor_id: str, offset: float) -> None:
+        """Scroll so the post ``anchor_id`` sits where it was, and keep it there for the first
+        second while the rows above settle (pictures sizing themselves); stops if you scroll."""
+        adjustment = self._scroller.get_vadjustment()
+        state = {"frames": 0, "set": None}
+
+        def tick(_widget, _clock) -> bool:
+            state["frames"] += 1
+            if state["set"] is not None and abs(adjustment.get_value() - state["set"]) > 1:
+                return GLib.SOURCE_REMOVE  # you scrolled
+            row = next((r for r in self._all_rows() if hasattr(r, "item") and self.item_id(r.item) == anchor_id), None)
+            if row is None:
+                return GLib.SOURCE_REMOVE
+            ok, point = row.compute_point(self._column, Graphene.Point().init(0, 0))
+            if ok and row.get_height() > 0:
+                target = point.y - offset
+                if abs(adjustment.get_value() - target) > 1:
+                    adjustment.set_value(target)
+                state["set"] = adjustment.get_value()
+            return GLib.SOURCE_CONTINUE if state["frames"] < 60 else GLib.SOURCE_REMOVE
+
+        self._scroller.add_tick_callback(tick)
+
+    def _all_rows(self):
+        index = 0
+        while row := self._list.get_row_at_index(index):
+            yield row
+            index += 1
+
     def load_more(self) -> None:
         if self._loading:
+            return
+        if self._reload_for_more:
+            self.reload()
             return
         if self._retry_first:
             self._retry_first = False
@@ -173,7 +263,8 @@ class PagedListView(Gtk.Stack):
     # -- misc ---------------------------------------------------------------
 
     def _on_edge_reached(self, _scroller, position: Gtk.PositionType) -> None:
-        if position == Gtk.PositionType.BOTTOM:
+        # (Not for a cut-short saved copy: that would reload and jump to the top on its own.)
+        if position == Gtk.PositionType.BOTTOM and not self._reload_for_more:
             self.load_more()
 
     # -- new posts pill ---------------------------------------------------------

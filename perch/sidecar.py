@@ -10,6 +10,8 @@ from typing import Any, Callable
 
 from gi.repository import GLib
 
+from perch import crash
+
 Callback = Callable[[Any, "RpcError | None"], None]
 
 
@@ -118,6 +120,8 @@ class Sidecar:
         """The sidecar caches reads for a short while; calls made inside ``fresh()`` skip that."""
 
         def deliver(result, error):
+            if error is not None:
+                crash.note(f"{method} failed ({error.kind})")
             if isinstance(result, dict) and result.get("stale") and self.on_stale:
                 self.on_stale(int(result["stale"]))
             callback(result, error)

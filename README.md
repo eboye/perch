@@ -5,7 +5,7 @@ location, website, photo, header), your likes, highlights, removing followers, m
 muted / blocked account lists), who to follow, who reposted or quoted a post (and who liked
 your own — X keeps likes private otherwise), search (posts and people, with filters, recent and saved searches), bookmarks, lists, like / repost / quote / bookmark, posting
 and replying with images (with alt text), threads, drafts, translating posts, scheduling posts (and cancelling them), deleting your own posts, swipeable galleries for multi-media posts, an in-app viewer for photos (with zoom), videos and GIFs, notifications (grouped per post with an excerpt; all, mentions, likes, reposts or follows), a "new posts" pill on Following, closing to the dock (the window minimizes; Perch keeps running), an unread count on the dock icon (docks that show counts, such as Dash to Dock), remembering the window size and last tab, following the system's light / dark switch live (including theme tools such as Rewaita that rewrite `~/.config/gtk-4.0/gtk.css`), several accounts (switch from the main menu), lists pinned as tabs, muted words, direct messages (with replies, reactions, GIFs, an unread filter, photos, earlier
-history and deleting conversations), keyboard navigation (j / k / l / r, Ctrl+? for the list), Preferences (Ctrl+,: check interval, which desktop notifications, start tab, dock count, image cache), opening X links in Perch (Ctrl+L, `perch <link>`, `twitter://` links), desktop notifications (polled every
+history and deleting conversations), keyboard navigation (j / k / l / r, Ctrl+? for the list), Preferences (Ctrl+,: check interval, which desktop notifications, start tab, dock count, image cache), opening X links in Perch (Ctrl+L, `perch <link>`, `twitter://` links), opening instantly where you left off (and still showing your timelines when X can't be reached), crash reports you can send if Perch ever crashes, desktop notifications (polled every
 2 minutes while the app is open), and listening to Spaces (live and replays) — built on
 [rettiwt-api](https://github.com/Rishikant181/Rettiwt-API) (the same unofficial library
 `mfh-dashboard` shells out to via `npx rettiwt-api`).
@@ -59,6 +59,19 @@ cached results they affect. If X rate limits or the network is down, Perch shows
 30 minutes old) and says so. That cache is memory only; downloaded images (avatars, photos, DM
 photos) are kept on disk in `~/.cache/perch/images`, trimmed to 300 MB. Rules and tests: `sidecar/src/cache.js`,
 `npm --prefix sidecar test`.
+
+Following and For You are also saved on disk per account (`~/.cache/perch/snapshots/<account id>`: the
+last 150 or so posts loaded, and which one was at the top of the screen), so Perch opens on them straight
+away, where you left off, and still shows them when X can't be reached. Signing out deletes that
+account's copy; Preferences → Cache → "Posts, profiles and messages" → Clear deletes them all.
+
+## Crash reports
+
+If Perch crashes, the next start says so and shows a report: where it crashed (Python's
+`faulthandler`, with the C stack) and the last steps it took. Steps name only kinds of things (a post
+page, the compose box, an action), never posts, people, messages or links. The files are in
+`~/.cache/perch/crash`; nothing is sent anywhere unless you use Copy Report or Report on GitHub (which
+opens a prefilled issue for you to submit).
 
 ## Development
 

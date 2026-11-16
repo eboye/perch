@@ -4,7 +4,7 @@ import os
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
-from perch import APP_ID, APP_NAME, keyring, settings
+from perch import APP_ID, APP_NAME, crash, keyring, settings, snapshot
 from perch.compose import ComposeDialog
 from perch.edit_history import EditHistoryPage
 from perch.people import PeoplePage
@@ -45,6 +45,27 @@ TABS = (
 )
 
 
+def _page_kind(page) -> str:
+    """A page's kind for crash reports (never its title: that can be a name)."""
+    return "home" if page is not None and page.get_tag() == "home" else type(page).__name__
+
+
+def _tab_kind(name: str | None) -> str:
+    return "list" if name and name.startswith("list-") else str(name)
+
+
+def _when(timestamp: float) -> str:
+    """'at 14:05', 'yesterday at 14:05' or 'on 12 Nov' for the offline banner."""
+    then = GLib.DateTime.new_from_unix_local(int(timestamp))
+    now = GLib.DateTime.new_now_local()
+    days = now.get_day_of_year() - then.get_day_of_year() if now.get_year() == then.get_year() else 99
+    if days == 0:
+        return then.format("at %H:%M")
+    if days == 1:
+        return then.format("yesterday at %H:%M")
+    return then.format("on %-d %b")
+
+
 class PerchWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application, sidecar: Sidecar):
         # The size (and maximized state) it had last time.
@@ -66,6 +87,11 @@ class PerchWindow(Adw.ApplicationWindow):
         self._signin_attempted = False  # a key was tried while adding (the sidecar must be re-signed)
         sidecar.on_stale = self._on_stale
         self._me: dict | None = None
+        # Showing the saved copy of an account (see snapshot.py) until X answers, or while it can't.
+        self._from_saved = False
+        self._live = False  # X answered for the signed-in account (it's not only the saved copy)
+        self._retry_me = None  # signs in again once X can be reached (see _on_offline)
+        self._retry_source = 0
         self._demo = False
         self._opening_post = False  # a post is being fetched to open its page
         self.player = SpacePlayer()
@@ -175,6 +201,10 @@ class PerchWindow(Adw.ApplicationWindow):
             title="A new version of Perch is installed", button_label="Restart", action_name="app.restart-update", revealed=False
         )
         view.add_top_bar(self._update_banner)
+        # X can't be reached: what's shown is Perch's saved copy (see _on_offline).
+        self._offline_banner = Adw.Banner(button_label="Try Again", revealed=False)
+        self._offline_banner.connect("button-clicked", lambda *_: self._try_again())
+        view.add_top_bar(self._offline_banner)
         view.add_bottom_bar(PlayerBar(self.player))
         view.add_bottom_bar(bottom)
 
@@ -187,6 +217,7 @@ class PerchWindow(Adw.ApplicationWindow):
         self._nav = Adw.NavigationView()
         # A page that's been gone back from is never shown again (pages are made fresh): free it.
         self._nav.connect("popped", lambda _nav, page: release(page))
+        self._nav.connect("notify::visible-page", lambda nav, _p: crash.note(f"page {_page_kind(nav.get_visible_page())}"))
         self._nav.add(Adw.NavigationPage(child=view, title=APP_NAME, tag="home"))
         return self._nav
 
@@ -240,6 +271,8 @@ class PerchWindow(Adw.ApplicationWindow):
         page = self._nav.get_visible_page()
         if isinstance(page, MediaViewer):
             self._nav.pop()
+        crash.note("to the dock")
+        self._save_timelines_now()  # Perch may not come back from the dock in one piece
         self.minimize()
         return True
 
@@ -281,6 +314,7 @@ class PerchWindow(Adw.ApplicationWindow):
         self._toasts.add_toast(toast)
 
     def prepare_quit(self) -> None:
+        self._save_timelines_now()
         self._poller.stop()
         self.player.stop()
         self._badge.set_count(0)  # don't leave a count on the dock icon after quitting
@@ -296,6 +330,7 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def on_saved_data_cleared(self) -> None:
         """The sidecar forgot its saved copies: reload what's on screen straight from X."""
+        snapshot.forget_all()
         self._refresh()
         self.toast("Cleared — loading fresh from X")
 
@@ -330,7 +365,7 @@ class PerchWindow(Adw.ApplicationWindow):
             ("open-link", lambda: self.open_x_link_dialog()),
         ):
             action = Gio.SimpleAction.new(name, None)
-            action.connect("activate", lambda *_, h=handler: h())
+            action.connect("activate", lambda *_, h=handler, n=name: (crash.note(f"action {n}"), h()))
             self.add_action(action)
         switch = Gio.SimpleAction.new("switch-account", GLib.VariantType.new("s"))
         switch.connect("activate", lambda _a, target: self.switch_account(target.get_string()))
@@ -471,6 +506,8 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def _present_releasing(self, dialog: Adw.Dialog) -> None:
         """Show a dialog and free it once closed (after its own 'closed' handlers have run)."""
+        crash.note(f"dialog {type(dialog).__name__}")
+        dialog.connect("closed", lambda d: crash.note(f"closed {type(d).__name__}"))
         dialog.connect("closed", lambda d: GLib.idle_add(lambda: release_dialog(d) or GLib.SOURCE_REMOVE))
         dialog.present(self)
 
@@ -1036,6 +1073,7 @@ class PerchWindow(Adw.ApplicationWindow):
         return self._stack.get_visible_child_name()
 
     def _on_tab_changed(self) -> None:
+        crash.note(f"tab {_tab_kind(self._current_tab())}")
         if self._restoring_tabs:
             return  # tabs are being rebuilt for an account; the final one loads once they're done
         if self._signed_in():
@@ -1091,7 +1129,15 @@ class PerchWindow(Adw.ApplicationWindow):
             return
         view = self._views.get(self._current_tab())
         if view and not view.loaded_once:
-            view.reload()
+            saved = snapshot.load_timeline(self.me_id, view.kind) if isinstance(view, TimelineView) else None
+            if saved:
+                # Where you left off; anything newer waits behind the new-posts pill.
+                view.restore(saved)
+                view.restored_pending = not self._live  # checked once X answers (see _sign_in)
+                if self._live:
+                    self._check_newer(view)
+            else:
+                view.reload()
 
     # -- accounts ------------------------------------------------------------
     #
@@ -1155,6 +1201,10 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def _reset_session(self) -> None:
         """Before signing in as someone else: stop polling and audio, drop pages and loaded lists."""
+        self._save_timelines_now()
+        self._from_saved = self._live = False
+        self._stop_retrying()
+        self._offline_banner.set_revealed(False)
         self._poller.stop()
         self.player.stop()
         self._nav.pop_to_tag("home")
@@ -1176,6 +1226,7 @@ class PerchWindow(Adw.ApplicationWindow):
         current = self.me_id
         if current:
             keyring.clear(current)
+            snapshot.forget(current)
             settings.set("accounts", [a for a in self._accounts() if a.get("id") != current])
         self._reset_session()
         self._me = None
@@ -1244,7 +1295,13 @@ class PerchWindow(Adw.ApplicationWindow):
                 # The saved key belongs to a different account than the one it was saved for.
                 self._on_signin_failed(RpcError("That key signs in to a different account", "auth"))
                 return
+            was_saved = self._from_saved and (self._me or {}).get("id") == user.get("id")
             self._me = user
+            self._from_saved = False
+            self._live = True
+            self._stop_retrying()
+            self._offline_banner.set_revealed(False)
+            crash.note("signed in")
             self._adding_from = None
             self._signin_attempted = False
             settings.set_account(user["id"])
@@ -1262,23 +1319,180 @@ class PerchWindow(Adw.ApplicationWindow):
                             keyring.clear(keyring.LEGACY)
 
                     keyring.store(user["id"], key, label, stored)
+            snapshot.save_me(user["id"], user)
             self._rebuild_menu()
-            self.on_account_ready()  # this account's pinned tabs and last tab, before anything loads
+            if not was_saved:  # (already set up from the saved copy otherwise)
+                self.on_account_ready()  # this account's pinned tabs and last tab, before anything loads
             self._pages.set_visible_child_name("main")
             self._ensure_loaded()
+            for view in self._views.values():
+                if isinstance(view, TimelineView) and view.restored_pending:
+                    self._check_newer(view)
             self.load_muted_words()
             self._poller.start()
             if self._pending_link:
                 link, self._pending_link = self._pending_link, None
                 self.open_external_link(link)
 
+        saved_key = not persist  # (a key from the keyring, not one just typed in)
+
+        def on_me_or_offline(user, error: RpcError | None):
+            if error and saved_key and error.kind != "auth":
+                # X can't be reached (or is rate limiting): the key is fine, so don't ask for it.
+                self._on_offline(error, retry=lambda: self._sidecar.call("me", None, on_me_or_offline))
+                return
+            if error and self._from_saved:
+                self._reset_session()  # the saved copy was shown, but this key no longer works
+                self._me = None
+            on_me(user, error)
+
         def on_init(_result, error: RpcError | None):
             if error:
+                if self._from_saved:
+                    self._reset_session()  # the saved copy was shown, but this key no longer works
+                    self._me = None
                 self._on_signin_failed(error)
             else:
-                self._sidecar.call("me", None, on_me)
+                self._sidecar.call("me", None, on_me_or_offline)
 
-        self._sidecar.sign_in(key, on_init)
+        self._sidecar.sign_in(key, on_init)  # (sent first: anything asked of X below goes after it)
+        if account_id and self._me is None:
+            self._show_saved(account_id)
+
+    def _show_saved(self, account_id: str) -> None:
+        """Open on the account's saved copy straight away, while X is asked (see snapshot.py)."""
+        user = snapshot.load_me(account_id)
+        if not user or snapshot.saved_at(account_id) is None:
+            return
+        crash.note("opened on the saved copy")
+        self._me = user
+        self._from_saved = True
+        settings.set_account(user["id"])
+        self._rebuild_menu()
+        self.on_account_ready()
+        self._pages.set_visible_child_name("main")
+        self._ensure_loaded()
+
+    def _on_offline(self, error: RpcError, retry) -> None:
+        """Signing in with a saved key failed because X can't be reached (or is rate limiting):
+        keep showing the saved copy (or say so on the start page), and try again by itself."""
+        crash.note(f"offline ({error.kind})")
+        self._retry_me = retry
+        what = "X is limiting requests right now" if error.kind == "rate_limit" else "Can't reach X"
+        if self._from_saved:
+            when = snapshot.saved_at(self.me_id)
+            self._offline_banner.set_title(f"{what} — showing posts saved {_when(when)}" if when else what)
+            self._offline_banner.set_revealed(True)
+        else:
+            self._start_status.set_icon_name("network-offline-symbolic")
+            self._start_status.set_title(what)
+            self._start_status.set_description("Perch will keep trying. Check your connection, or try again now.")
+            retry_button = Gtk.Button(label="Try Again", halign=Gtk.Align.CENTER, css_classes=["pill", "suggested-action"])
+            retry_button.connect("clicked", lambda *_: self._try_again())
+            self._start_status.set_child(retry_button)
+            self._pages.set_visible_child_name("starting")
+        self._start_retrying()
+
+    def _start_retrying(self) -> None:
+        """Every minute, and as soon as the computer says it's back online."""
+        if not self._retry_source:
+            self._retry_source = GLib.timeout_add_seconds(60, lambda: self._try_again() or GLib.SOURCE_CONTINUE)
+        if not getattr(self, "_network_handler", 0):
+            monitor = Gio.NetworkMonitor.get_default()
+            self._network_handler = monitor.connect("network-changed", lambda _m, up: up and self._retry_me and GLib.timeout_add_seconds(2, lambda: self._try_again() or GLib.SOURCE_REMOVE))
+
+    def _stop_retrying(self) -> None:
+        self._retry_me = None
+        if self._retry_source:
+            GLib.source_remove(self._retry_source)
+            self._retry_source = 0
+
+    def _try_again(self) -> None:
+        if self._retry_me:
+            crash.note("trying again")
+            if not self._from_saved:
+                self._start_status.set_child(Adw.Spinner(width_request=32, height_request=32))
+                self._start_status.set_icon_name(None)
+                self._start_status.set_title("Connecting…")
+                self._start_status.set_description(None)
+            self._sidecar.fresh(self._retry_me)
+        elif self._live:
+            # Signed in, but loading failed: ask X again for what's on screen.
+            self._offline_banner.set_revealed(False)
+            self._refresh()
+
+    def on_unreachable(self, error: RpcError | None = None) -> None:
+        """Signed in, but X stopped answering (a load or a background check failed that way)."""
+        if self._live and not self._offline_banner.get_revealed():
+            crash.note("x unreachable")
+            self._offline_banner.set_title("X is limiting requests right now" if error and error.kind == "rate_limit" else "Can't reach X — what's shown may be out of date")
+            self._offline_banner.set_revealed(True)
+
+    def on_reachable(self) -> None:
+        """X answered again (a background check worked)."""
+        if self._live and self._offline_banner.get_revealed():
+            crash.note("x reachable")
+            self._offline_banner.set_revealed(False)
+
+    def _check_newer(self, view: TimelineView) -> None:
+        """A timeline opened on its saved copy: ask X for its newest posts and offer the ones that
+        are newer than the copy with the new-posts pill (instead of moving you to the top)."""
+        view.restored_pending = False
+
+        def done(result, error):
+            if error:
+                if error.kind in ("network", "rate_limit"):
+                    self.on_unreachable(error)
+                return
+            if not result.get("stale"):
+                self.on_reachable()
+            items = result.get("list") or []
+            view.offer_new_posts(view.count_new(items))
+
+        self._sidecar.fresh(self._sidecar.call, "timeline", {"kind": view.kind, "cursor": None}, done)
+
+    def save_timeline(self, view: TimelineView) -> None:
+        """Save a timeline's posts and place (called a moment after they change)."""
+        if not self._me or not view.loaded_once or self._pages.get_visible_child_name() != "main":
+            return
+        items, cursor, anchor = view.saved_state(snapshot.MAX_ITEMS)
+        if items:
+            snapshot.save_timeline(self.me_id, view.kind, items, cursor, anchor)
+
+    def _save_timelines_now(self) -> None:
+        for view in self._views.values():
+            if isinstance(view, TimelineView):
+                view.save_pending()
+
+    def offer_crash_report(self, report: str) -> None:
+        """The last run crashed: say so, show the report, and offer to send it (nothing is sent
+        unless you do)."""
+        text = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR, cursor_visible=False, top_margin=8, bottom_margin=8, left_margin=8, right_margin=8)
+        text.get_buffer().set_text(report)
+        text.update_property([Gtk.AccessibleProperty.LABEL], ["Crash report"])
+        scroller = Gtk.ScrolledWindow(child=text, min_content_height=220, max_content_height=320, propagate_natural_height=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroller.add_css_class("card")
+        dialog = Adw.AlertDialog(
+            heading="Perch Closed Unexpectedly",
+            body="Last time, Perch stopped while it was running. This report says what it was doing — no posts, names or messages. Sending it helps fix the problem.",
+            extra_child=scroller,
+        )
+        dialog.add_response("close", "Close")
+        dialog.add_response("copy", "Copy Report")
+        dialog.add_response("report", "Report on GitHub")
+        dialog.set_response_appearance("report", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_close_response("close")
+
+        def on_response(_dialog, response):
+            crash.dismiss()
+            if response == "copy":
+                self.get_display().get_clipboard().set(report)
+                self.toast("Report copied")
+            elif response == "report":
+                Gtk.UriLauncher(uri=crash.issue_url(report)).launch(self, None, None, None)
+
+        dialog.connect("response", on_response)
+        self._present_releasing(dialog)
 
     def _on_signin_failed(self, error: RpcError) -> None:
         if error.kind == "auth":
@@ -1298,6 +1512,9 @@ class PerchWindow(Adw.ApplicationWindow):
             else:
                 self.toast(message)
         elif error.kind == "rate_limit":
+            self.on_unreachable(error)
             self.toast("Rate limited by X — try again in a few minutes")
+        elif error.kind == "network":
+            self.on_unreachable(error)
         else:
             self.toast(f"Couldn't load more: {error}")

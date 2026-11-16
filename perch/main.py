@@ -8,7 +8,7 @@ from pathlib import Path  # noqa: E402
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gst, Gtk  # noqa: E402
 
-from perch import APP_ID, APP_NAME, VERSION, images, settings  # noqa: E402
+from perch import APP_ID, APP_NAME, VERSION, crash, images, settings  # noqa: E402
 from perch.sidecar import Sidecar  # noqa: E402
 from perch.updates import UpdateMonitor  # noqa: E402
 from perch.window import PerchWindow  # noqa: E402
@@ -26,6 +26,7 @@ class PerchApplication(Adw.Application):
         self.sidecar = Sidecar()
         self.quitting = False
         self._main_window: PerchWindow | None = None
+        self._crash_report: str | None = None  # the last run crashed: offered once the window is up
         self.connect("shutdown", lambda *_: self.sidecar.stop())
         # `perch --quit` (the desktop file's "Quit Completely" action, shown on the dock icon's
         # right-click menu) ends the running instance.
@@ -51,6 +52,9 @@ class PerchApplication(Adw.Application):
         return 0
 
     def do_startup(self):
+        # Only the running instance gets here (`perch <link>` hands over to it), so a second launch
+        # never touches its crash files.
+        self._crash_report = crash.install()
         Adw.Application.do_startup(self)
         css = Gtk.CssProvider()
         css.load_from_path(str(Path(__file__).with_name("style.css")))
@@ -142,20 +146,29 @@ class PerchApplication(Adw.Application):
         """Links handed to Perch (command line, the twitter:// scheme): open them inside the app."""
         window = self._window()
         window.present()
+        self._offer_crash_report()
         for file in files:
             window.open_external_link(file.get_uri())
 
     def do_activate(self):
         # Also what launching Perch again ends up calling: bring the (minimized) window back.
         self._window().present()
+        self._offer_crash_report()
         # Coming back to Perch is when a fresh install matters; don't wait for the portal's poll.
         if hasattr(self, "updates"):
             self.updates.check_now()
+
+    def _offer_crash_report(self) -> None:
+        if self._crash_report:
+            report, self._crash_report = self._crash_report, None
+            window = self._window()
+            GLib.idle_add(lambda: window.offer_crash_report(report) or GLib.SOURCE_REMOVE)
 
     def _quit(self) -> None:
         if self.quitting:
             return
         self.quitting = True
+        crash.note("quit")
         if self._main_window is not None:
             self._main_window.prepare_quit()
             self._main_window.destroy()

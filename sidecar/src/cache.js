@@ -104,9 +104,16 @@ function stableKey(method, params) {
 	return `${method} ${JSON.stringify(keys.map((k) => [k, params[k]]))}`;
 }
 
+// X can't be reached (offline, DNS, refused, timed out). The library often loses the error code and
+// reports these as a generic status-500 error whose message still names it ("connect ENETUNREACH …").
+const NETWORK_CODES = ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN', 'ECONNRESET', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'EPIPE'];
+const NETWORK_MESSAGE = new RegExp(`\\b(${NETWORK_CODES.join('|')})\\b|socket hang up|network error|timeout of \\d+ms exceeded`, 'i');
+const isNetworkError = (err) =>
+	err?.kind === 'network' || NETWORK_CODES.includes(err?.code) || NETWORK_CODES.includes(err?.cause?.code) || NETWORK_MESSAGE.test(String(err?.message || ''));
+
 const isTransient = (err) => {
 	const status = err?.status ?? err?.response?.status;
-	return err?.kind === 'rate_limit' || err?.kind === 'network' || status === 429 || ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN', 'ECONNRESET'].includes(err?.code);
+	return err?.kind === 'rate_limit' || status === 429 || isNetworkError(err);
 };
 
 class ResponseCache {
@@ -204,6 +211,9 @@ class ResponseCache {
 
 		const generation = this.generation;
 		const request = (async () => {
+			// Let `request` be set (and registered below) before the fetch runs: a fetcher that throws
+			// straight away would otherwise reach `finally` while `request` is still uninitialised.
+			await null;
 			try {
 				const value = await fetch(clean);
 				if (this.generation === generation) this.store(key, method, value, clean);
@@ -246,4 +256,4 @@ class ResponseCache {
 	}
 }
 
-module.exports = { ResponseCache, TTL, INVALIDATES, stableKey };
+module.exports = { ResponseCache, TTL, INVALIDATES, stableKey, isNetworkError };

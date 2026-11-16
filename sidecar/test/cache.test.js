@@ -3,7 +3,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ResponseCache } = require('../src/cache');
+const { ResponseCache, isNetworkError } = require('../src/cache');
 
 function setup() {
 	let clock = 1_000_000;
@@ -164,6 +164,29 @@ test('on a rate limit, a recent copy is served and marked stale', async () => {
 	assert.equal(result.list.length, 1);
 });
 
+test('offline, as the library reports it (a status-500 error naming ENETUNREACH), a recent copy is served', async () => {
+	const { cache, fetcher, advance } = setup();
+	await cache.run('timeline', { kind: 'following' }, fetcher(page()));
+	advance(120);
+	const result = await cache.run('timeline', { kind: 'following' }, async () => {
+		throw Object.assign(new Error('connect ENETUNREACH 162.159.140.229:443 - Local (0.0.0.0:0)'), { status: 500 });
+	});
+	assert.equal(result.stale, 120);
+});
+
+test('network errors are recognised by code or message, and nothing else is', () => {
+	for (const err of [
+		{ code: 'ECONNRESET' },
+		{ cause: { code: 'ENETDOWN' } },
+		{ message: 'getaddrinfo EAI_AGAIN api.x.com' },
+		{ message: 'timeout of 20000ms exceeded' },
+		{ message: 'socket hang up' },
+		{ kind: 'network' },
+	])
+		assert.equal(isNetworkError(err), true, JSON.stringify(err));
+	for (const err of [{ message: 'Request failed with status code 404', status: 404 }, { message: 'boom' }, null, { message: 'ENETUNREACHABLE-ish' }]) assert.equal(isNetworkError(err), false, JSON.stringify(err));
+});
+
 test('other errors, or copies older than 30 minutes, are not served', async () => {
 	const { cache, fetcher, advance } = setup();
 	await cache.run('timeline', { kind: 'following' }, fetcher(page()));
@@ -171,6 +194,18 @@ test('other errors, or copies older than 30 minutes, are not served', async () =
 	await assert.rejects(cache.run('timeline', { kind: 'following' }, async () => Promise.reject(Object.assign(new Error('gone'), { status: 404 }))));
 	advance(31 * 60);
 	await assert.rejects(cache.run('timeline', { kind: 'following' }, async () => Promise.reject(Object.assign(new Error('slow down'), { status: 429 }))));
+});
+
+test('a fetcher that throws straight away fails that call only, and is not left in flight', async () => {
+	const { cache, calls, fetcher } = setup();
+	await assert.rejects(
+		cache.run('timeline', { kind: 'following' }, () => {
+			throw new Error('boom');
+		}),
+		/boom/,
+	);
+	await cache.run('timeline', { kind: 'following' }, fetcher(page()));
+	assert.equal(calls.length, 1);
 });
 
 test('errors are never cached', async () => {

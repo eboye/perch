@@ -58,6 +58,11 @@ class Poller:
     def _round_result(self, result, error) -> None:
         """Back off while X says slow down (or a saved copy had to stand in), recover after."""
         throttled = (error is not None and error.kind in ("rate_limit", "network")) or (isinstance(result, dict) and result.get("stale"))
+        # The offline banner follows what the checks find.
+        if throttled:
+            self._window.on_unreachable(error)
+        elif error is None:
+            self._window.on_reachable()
         if throttled and not self._round_failed:
             self._round_failed = True
             self._delay = min(max(self._delay, self.interval) * 2, MAX_BACKOFF_SECONDS)

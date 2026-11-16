@@ -4,6 +4,7 @@
 // rettiwt-api reads notifications (as a polling stream only) and DMs (inbox + conversation) but
 // cannot send DMs; sending uses the web client's dm/new2.json endpoint via signedFetch.
 
+const { expandLinks } = require('./links');
 const { randomUUID } = require('node:crypto');
 const { readFileSync, statSync } = require('node:fs');
 const { basename, extname } = require('node:path');
@@ -86,14 +87,9 @@ function postTexts(root) {
 		const node = stack.pop();
 		if (!node || typeof node !== 'object') continue;
 		if (typeof node.rest_id === 'string' && typeof node.legacy?.full_text === 'string' && !texts.has(node.rest_id)) {
-			let text = node.note_tweet?.note_tweet_results?.result?.text || node.legacy.full_text;
-			for (const link of node.legacy.entities?.urls || []) {
-				if (link.url && link.expanded_url) text = text.split(link.url).join(link.expanded_url);
-			}
-			for (const media of node.legacy.entities?.media || []) {
-				if (media.url) text = text.split(media.url).join('');
-			}
-			texts.set(node.rest_id, text.trim());
+			const text = node.note_tweet?.note_tweet_results?.result?.text || node.legacy.full_text;
+			const quotedId = node.quoted_status_result?.result?.rest_id || node.legacy.quoted_status_id_str;
+			texts.set(node.rest_id, (expandLinks(text, node, quotedId) || '').trim());
 		}
 		for (const value of Array.isArray(node) ? node : Object.values(node)) {
 			if (value && typeof value === 'object') stack.push(value);

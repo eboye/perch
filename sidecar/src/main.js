@@ -16,7 +16,8 @@ const { Rettiwt } = require('rettiwt-api');
 const { signedFetch } = require('./xhttp');
 const inbox = require('./inbox');
 const demo = require('./demo');
-const { ResponseCache } = require('./cache');
+const { ResponseCache, isNetworkError } = require('./cache');
+const { expandLinks } = require('./links');
 const { UserRequests } = require('rettiwt-api/dist/requests/User');
 const { CursoredData } = require('rettiwt-api/dist/models/data/CursoredData');
 const { BaseType } = require('rettiwt-api/dist/enums/Data');
@@ -702,6 +703,7 @@ function serializeTweet(tweet) {
 	const editIds = control.edit_tweet_ids || control.edit_control_initial?.edit_tweet_ids || [];
 	out.edited = editIds.length > 1;
 	pickVideoVariants(out, legacy);
+	out.fullText = expandLinks(out.fullText, tweet.raw, tweet.quoted?.id);
 	if (tweet.quoted) out.quoted = serializeTweet(tweet.quoted);
 	if (tweet.retweetedTweet) out.retweetedTweet = serializeTweet(tweet.retweetedTweet);
 	return out;
@@ -733,9 +735,12 @@ function classify(err) {
 	let kind = err?.kind || 'error';
 	if (status === 401 || status === 403) kind = 'auth';
 	else if (status === 429 || status === 88) kind = 'rate_limit';
-	else if (['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN'].includes(err?.code)) kind = 'network';
+	else if (isNetworkError(err)) kind = 'network';
 	return { message: err?.message || String(err), kind, status: typeof status === 'number' ? status : null };
 }
+
+// Methods that never talk to X.
+const LOCAL_METHODS = new Set(['ping', 'init', 'signout', 'cache.stats', 'cache.clear']);
 
 async function handle(line) {
 	let request;
@@ -753,7 +758,12 @@ async function handle(line) {
 	}
 	try {
 		if (!fn) throw new Error(`Unknown method: ${method}`);
-		const result = await cache.run(method, params, (clean) => fn(clean));
+		const result = await cache.run(method, params, (clean) => {
+			// UI tests: PERCH_DEMO_OFFLINE_FILE names a file whose presence means "X can't be reached"
+			// (thrown the way the real library reports it).
+			if (demoMode && demo.offline() && !LOCAL_METHODS.has(method)) throw Object.assign(new Error('connect ENETUNREACH 192.0.2.1:443'), { status: 500 });
+			return fn(clean);
+		});
 		writeFrame(JSON.stringify({ id, result }) + '\n');
 	} catch (err) {
 		console.error(`[sidecar] ${method} failed:`, err?.message || err);

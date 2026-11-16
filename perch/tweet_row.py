@@ -593,6 +593,7 @@ class TweetRow(Gtk.ListBoxRow):
             self.add_css_class("tweet-detail")
         shown = tweet.get("retweetedTweet") or tweet
         self.tweet = shown  # what this row displays (the original, for a repost)
+        self.item = tweet  # what it was made from (saved for the next start, see snapshot.py)
         self.url = shown.get("url")
         self.tweet_id = tweet.get("id")
         self._controller = controller
