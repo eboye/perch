@@ -204,10 +204,11 @@ function profile(key) {
 
 function userPosts(id, kind, cursor) {
 	const page = cursor ? Number(cursor) : 0;
-	const by = users.find((u) => u.id === String(id)) || users[1];
+	// Likes are posts by other people; everything else is by the profile's owner.
+	const by = kind === 'likes' ? null : users.find((u) => u.id === String(id)) || users[1];
 	const list = Array.from({ length: 10 }, (_, i) => {
-		const t = tweet(page * 10 + i + (kind === 'replies' ? 40 : kind === 'media' ? 80 : 0), 'following', true);
-		return { ...t, tweetBy: by, url: `https://x.com/${by.userName}/status/${t.id}` };
+		const t = tweet(page * 10 + i + ({ replies: 40, media: 80, likes: 120 }[kind] || 0), 'following', true);
+		return by ? { ...t, tweetBy: by, url: `https://x.com/${by.userName}/status/${t.id}` } : t;
 	});
 	return { list, next: page < 1 ? String(page + 1) : '' };
 }
@@ -267,9 +268,39 @@ function history(id) {
 	return { list, next: '' };
 }
 
+// Scheduled posts, kept in memory for the demo session.
+let scheduledPosts = null;
+
+function scheduled() {
+	if (scheduledPosts === null) {
+		const now = Math.floor(Date.now() / 1000);
+		scheduledPosts = [
+			{ id: '9001', text: 'Release notes for the next Perch build go out tomorrow morning.', executeAt: now + 20 * 3600, state: 'Scheduled', mediaCount: 0 },
+			{ id: '9002', text: 'Weekly GTK tips thread — this week: list views and sections.', executeAt: now + 4 * 86400, state: 'Scheduled', mediaCount: 2 },
+		];
+	}
+	return { list: [...scheduledPosts].sort((a, b) => a.executeAt - b.executeAt), next: '' };
+}
+
+function schedule(text, mediaCount, at) {
+	scheduled();
+	const id = String(9100 + scheduledPosts.length);
+	scheduledPosts.push({ id, text: text || '', executeAt: at, state: 'Scheduled', mediaCount });
+	return { id };
+}
+
+function unschedule(id) {
+	scheduled();
+	scheduledPosts = scheduledPosts.filter((item) => item.id !== String(id));
+	return { ok: true };
+}
+
 module.exports = {
 	bookmarks,
 	history,
+	scheduled,
+	schedule,
+	unschedule,
 	lists,
 	searchPosts,
 	searchUsers,

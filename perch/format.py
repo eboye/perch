@@ -82,6 +82,32 @@ def full_time(raw: str | None) -> str:
     return f"{stamp.astimezone():%H:%M · %a %d %b %Y}" if stamp else ""
 
 
+def schedule_time(unix: float | None, now: datetime | None = None) -> str:
+    """When a scheduled post goes out, in local time: "Today at 18:30", "Tomorrow at 09:00",
+    "Tue 18 Nov at 09:00", or with the year when it isn't this year."""
+    if unix is None:
+        return ""
+    stamp = datetime.fromtimestamp(float(unix)).astimezone()
+    now = (now or datetime.now(timezone.utc)).astimezone()
+    days = (stamp.date() - now.date()).days
+    clock = f"{stamp:%H:%M}"
+    if days == 0:
+        return f"Today at {clock}"
+    if days == 1:
+        return f"Tomorrow at {clock}"
+    if stamp.year == now.year:
+        return f"{stamp:%a} {stamp.day} {stamp:%b} at {clock}"
+    return f"{stamp:%a} {stamp.day} {stamp:%b} {stamp.year} at {clock}"
+
+
+def schedule_phrase(unix: float | None, now: datetime | None = None) -> str:
+    """``schedule_time`` worded to follow "Posts …": "today at 18:30", "on Tue 18 Nov at 09:00"."""
+    text = schedule_time(unix, now)
+    if text.startswith(("Today", "Tomorrow")):
+        return text[0].lower() + text[1:]
+    return f"on {text}" if text else ""
+
+
 def avatar_url(url: str | None) -> str | None:
     # X serves 48px "_normal" avatars by default; "_bigger" (73px) stays sharp at 2x scale.
     return url.replace("_normal.", "_bigger.") if url else None

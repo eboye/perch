@@ -17,6 +17,8 @@ from perch.sidecar import RpcError, Sidecar
 from perch.spaces import PlayerBar, SpaceDialog, SpacePlayer, ask_space_url
 from perch import format as fmt
 from perch.profile import ProfilePage
+from perch.profile_edit import ProfileEditDialog
+from perch.scheduled import ScheduledPage
 from perch.search import SearchPage
 from perch.lists import AddToListDialog, BookmarksPage, ListPage, ListsPage
 from perch.timeline import TimelineView
@@ -160,6 +162,7 @@ class PerchWindow(Adw.ApplicationWindow):
             account.append("My Profile", "win.my-profile")
             account.append("Bookmarks", "win.bookmarks")
             account.append("Lists", "win.lists")
+            account.append("Scheduled Posts", "win.scheduled")
             self._menu.append_section(None, account)
         actions = Gio.Menu()
         actions.append("Open Space…", "win.open-space")
@@ -208,6 +211,7 @@ class PerchWindow(Adw.ApplicationWindow):
             ("search", lambda: self.open_search()),
             ("bookmarks", lambda: self.open_bookmarks()),
             ("lists", lambda: self.open_lists()),
+            ("scheduled", lambda: self.open_scheduled()),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
@@ -310,6 +314,39 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def open_lists(self) -> None:
         self._push_unique("lists", lambda: ListsPage(self))
+
+    def open_scheduled(self) -> None:
+        self._push_unique("scheduled", lambda: ScheduledPage(self))
+
+    def on_scheduled(self, at: int) -> None:
+        """A post was scheduled from the compose dialog."""
+        page = self._nav.find_page("scheduled")
+        if page is not None:
+            page.reload()
+        toast = Adw.Toast(title=GLib.markup_escape_text(f"Scheduled to post {fmt.schedule_phrase(at)}"), timeout=5)
+        toast.set_button_label("View")
+        toast.connect("button-clicked", lambda *_: self.open_scheduled())
+        self._toasts.add_toast(toast)
+
+    def edit_profile(self, user: dict) -> None:
+        if self._signed_in() and user.get("id") == self.me_id:
+            ProfileEditDialog(self, user).present(self)
+
+    def on_profile_updated(self, quiet: bool = False) -> None:
+        """Your profile changed on X: refresh the signed-in account and any open copy of your profile."""
+
+        def on_me(user, error):
+            if not error and user:
+                self._me = user
+                self._rebuild_menu()
+
+        self._sidecar.call("me", None, on_me)
+        handle = (self._me or {}).get("userName", "")
+        page = self._nav.find_page(f"profile-{handle.lower()}") if handle else None
+        if page is not None:
+            page.reload()
+        if not quiet:
+            self.toast("Profile updated")
 
     def open_list(self, lst: dict) -> None:
         self._push_unique(f"list-{lst['id']}", lambda: ListPage(self, lst))
@@ -551,7 +588,7 @@ class PerchWindow(Adw.ApplicationWindow):
         if not self._signed_in():
             return
         page = self._nav.get_visible_page()
-        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage, PeoplePage, EditHistoryPage)):
+        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage, PeoplePage, EditHistoryPage, ScheduledPage)):
             page.reload()
             return
         view = self._views[self._current_tab()]

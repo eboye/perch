@@ -8,6 +8,8 @@ from perch.paged_list import PagedListView
 from perch.tweet_row import TweetRow
 
 TABS = (("posts", "Posts"), ("replies", "Replies"), ("media", "Media"))
+# X shows likes only to their owner, so this tab is on your own profile only.
+OWN_TABS = TABS + (("likes", "Likes"),)
 
 
 def _counts_markup(user: dict) -> str:
@@ -31,7 +33,7 @@ class _ProfilePostsView(PagedListView):
 
     @property
     def empty_label(self) -> str:  # noqa: D401 - read by PagedListView
-        return {"replies": "No replies yet", "media": "No photos or videos yet"}.get(self.kind, "No posts yet")
+        return {"replies": "No replies yet", "media": "No photos or videos yet", "likes": "No likes yet"}.get(self.kind, "No posts yet")
 
     def set_kind(self, kind: str) -> None:
         if kind != self.kind:
@@ -139,6 +141,10 @@ class ProfilePage(Adw.NavigationPage):
         self._follow_button = self._build_follow_button(user)
         if self._follow_button:
             action_row.append(self._follow_button)
+        elif user.get("id") == self._controller.me_id:
+            edit = Gtk.Button(label="Edit Profile", valign=Gtk.Align.CENTER, css_classes=["pill"])
+            edit.connect("clicked", lambda *_: self._controller.edit_profile(self.user or user))
+            action_row.append(edit)
         top.append(action_row)
 
         avatar = Adw.Avatar(size=88, text=user.get("fullName") or self.handle, show_initials=True)
@@ -209,7 +215,8 @@ class ProfilePage(Adw.NavigationPage):
     def _build_tabs(self) -> Gtk.Widget:
         group = Adw.ToggleGroup(halign=Gtk.Align.CENTER, margin_top=14, margin_bottom=6)
         group.add_css_class("round")
-        for name, label in TABS:
+        own = (self.user or {}).get("id") == self._controller.me_id
+        for name, label in OWN_TABS if own else TABS:
             group.add(Adw.Toggle(name=name, label=label))
         group.set_active_name(self._posts.kind if self._posts else "posts")
         group.connect("notify::active-name", lambda g, _p: self._posts.set_kind(g.get_active_name()))

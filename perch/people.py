@@ -16,16 +16,53 @@ class _PeopleView(PagedListView):
         self._method = method
         self._params = params
         self.empty_title = empty_title  # read by PagedListView.__init__
+        # Your own followers list: each row can remove that follower.
+        self._removable = method == "user.connections" and params.get("kind") == "followers" and params.get("id") == controller.me_id
         super().__init__(controller)
 
     def fetch_page(self, cursor, callback) -> None:
         self._controller.sidecar.call(self._method, {**self._params, "cursor": cursor}, callback)
 
     def make_row(self, item: dict, page: dict) -> UserRow:
-        return UserRow(item, self._controller.me_id)
+        row = UserRow(item, self._controller.me_id)
+        if self._removable and item.get("id") != self._controller.me_id:
+            remove = Gtk.Button(label="Remove", tooltip_text=f"Remove @{item.get('userName', '')} from your followers")
+            remove.add_css_class("pill")
+            remove.add_css_class("small-pill")
+            remove.connect("clicked", lambda *_: self._confirm_remove(row))
+            row.add_suffix(remove)
+        return row
 
     def on_row_activated(self, row: UserRow) -> None:
         self._controller.open_profile(row.user)
+
+    def _confirm_remove(self, row: UserRow) -> None:
+        handle = row.user.get("userName", "")
+        dialog = Adw.AlertDialog(
+            heading=f"Remove @{handle}?",
+            body="They'll stop following you and won't see your posts in their Following timeline. X doesn't notify them, and they can follow you again.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("remove", "Remove")
+        dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def done(_result, error):
+            if error:
+                self._controller.report_error(error, f"Couldn't remove @{handle}")
+                return
+            self._list.remove(row)
+            if self._list.get_row_at_index(0) is None:
+                self.set_visible_child_name("empty")
+            self._controller.toast(f"Removed @{handle} from your followers")
+
+        def on_response(_dialog, response):
+            if response == "remove":
+                self._controller.sidecar.call("user.removeFollower", {"id": row.user["id"]}, done)
+
+        dialog.connect("response", on_response)
+        dialog.present(self.get_root())
 
 
 class PeoplePage(Adw.NavigationPage):

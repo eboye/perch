@@ -46,7 +46,13 @@ class UserRow(Gtk.ListBoxRow):
             css_classes=["dim-label", "caption"],
         )
         row.append(counts)
+        self._box = row
         self.set_child(row)
+
+    def add_suffix(self, widget: Gtk.Widget) -> None:
+        """A widget at the row's end (e.g. a Remove button)."""
+        widget.set_valign(Gtk.Align.START)
+        self._box.append(widget)
 
 
 class _SearchResults(PagedListView):

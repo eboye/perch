@@ -95,13 +95,56 @@ const methods = {
 		return serializeUser(user);
 	},
 
-	// A user's posts / replies / media. { id, kind: 'posts'|'replies'|'media', cursor? } -> { list, next }
+	// A user's posts / replies / media, or (kind 'likes') the signed-in account's own likes: X only
+	// shows likes to their owner. { id, kind: 'posts'|'replies'|'media'|'likes', cursor? } -> { list, next }
 	'user.posts': async ({ id, kind, cursor }) => {
 		if (demoMode) return demo.userPosts(id, kind, cursor);
 		const users = requireClient().user;
+		if (kind === 'likes') {
+			const data = await users.likes(20, cursor || undefined);
+			return { list: data.list.map(serializeTweet), next: data.next };
+		}
 		const fetcher = { replies: users.replies, media: users.media }[kind] || users.timeline;
 		const data = await fetcher.call(users, String(id), 20, cursor || undefined);
 		return { list: data.list.map(serializeTweet), next: data.next };
+	},
+
+	// Remove someone from your followers (they are not notified). { id } -> { ok }
+	'user.removeFollower': async ({ id }) => {
+		if (!id) throw new Error('Missing user id');
+		if (demoMode) return { ok: true };
+		const ok = await requireClient().user.removeFollower(String(id));
+		if (!ok) throw new Error('X did not confirm removing the follower');
+		return { ok: true };
+	},
+
+	// Edit your profile. Only the fields present are sent; an empty string clears that field
+	// (rettiwt's updateProfile drops empty fields, so this posts the form itself).
+	// { name?, description?, location?, url? } -> { ok }
+	'profile.update': async (fields) => {
+		const form = new URLSearchParams();
+		for (const [key, limit] of Object.entries(PROFILE_LIMITS)) {
+			if (fields[key] === undefined || fields[key] === null) continue;
+			const value = String(fields[key]).trim();
+			if (value.length > limit) throw new Error(`${PROFILE_LABELS[key]} can be at most ${limit} characters`);
+			if (key === 'name' && !value) throw new Error('Name can’t be empty');
+			form.set(key, value);
+		}
+		if (![...form.keys()].length) throw new Error('Nothing to update');
+		if (demoMode) return { ok: true };
+		await postForm('https://x.com/i/api/1.1/account/update_profile.json', form);
+		return { ok: true };
+	},
+
+	// New profile photo or header. { kind: 'image'|'banner', data: base64 } -> { ok }
+	'profile.picture': async ({ kind, data }) => {
+		if (!data) throw new Error('Missing image');
+		if (kind !== 'image' && kind !== 'banner') throw new Error(`Unknown picture kind: ${kind}`);
+		if (demoMode) return { ok: true };
+		const form = new URLSearchParams({ [kind]: String(data) });
+		// X answers the banner upload with an empty 201, so success is the HTTP status, not a body.
+		await postForm(`https://x.com/i/api/1.1/account/update_profile_${kind}.json`, form);
+		return { ok: true };
 	},
 
 	// { id, follow: boolean } -> { ok }
@@ -289,14 +332,7 @@ const methods = {
 		if (!text?.trim() && items.length === 0) throw new Error('Nothing to post');
 		if (demoMode) return { id: String(Date.now()) };
 		const tweets = requireClient().tweet;
-		const media = [];
-		for (const item of items) {
-			const mediaId = await tweets.upload(item.path);
-			// Alt text has to be attached after the upload and before the post.
-			const alt = String(item.alt || '').trim().slice(0, MAX_ALT_TEXT);
-			if (alt) await tweets.setMediaMetadata(mediaId, { altText: alt });
-			media.push({ id: mediaId });
-		}
+		const media = await uploadMedia(tweets, items);
 		const id = await tweets.post({
 			text: text || undefined,
 			replyTo: replyTo || undefined,
@@ -305,6 +341,49 @@ const methods = {
 		});
 		if (!id) throw new Error('X did not return the new post id');
 		return { id };
+	},
+
+	// Schedule a new post (X can't schedule replies or quotes). { text, media?: [{ path, alt? }], at: unix seconds } -> { id }
+	'tweet.schedule': async ({ text, media: attachments, at }) => {
+		const items = (attachments || []).filter((m) => m?.path).slice(0, 4);
+		if (!text?.trim() && items.length === 0) throw new Error('Nothing to schedule');
+		const when = Number(at);
+		if (!Number.isFinite(when) || when * 1000 < Date.now() + 60_000) throw new Error('Pick a time at least a minute from now');
+		if (demoMode) return demo.schedule(text, items.length, when);
+		const tweets = requireClient().tweet;
+		const media = await uploadMedia(tweets, items);
+		const id = await tweets.schedule({ text: text || undefined, media: media.length ? media : undefined, scheduleFor: new Date(when * 1000) });
+		if (!id) throw new Error('X did not confirm the scheduled post');
+		return { id };
+	},
+
+	// Your scheduled posts, soonest first. {} -> { list: [{ id, text, executeAt, state, mediaCount }], next }
+	'tweet.scheduled': async () => {
+		if (demoMode) return demo.scheduled();
+		requireClient();
+		const url = new URL('https://x.com/i/api/graphql/ITtjAzvlZni2wWXwf295Qg/FetchScheduledTweets');
+		url.searchParams.set('variables', JSON.stringify({ ascending: true }));
+		const res = await signedFetch(client, url);
+		if (!res.ok) throw Object.assign(new Error(`Couldn’t load scheduled posts (HTTP ${res.status})`), { status: res.status });
+		const body = await res.json();
+		const list = (body?.data?.viewer?.scheduled_tweet_list || []).map((item) => ({
+			id: String(item.rest_id),
+			text: item.tweet_create_request?.status || '',
+			// X takes execute_at in seconds but lists it in milliseconds.
+			executeAt: toUnixSeconds(item.scheduling_info?.execute_at),
+			state: item.scheduling_info?.state || '',
+			mediaCount: (item.tweet_create_request?.media_ids || []).length,
+		}));
+		return { list, next: '' };
+	},
+
+	// Cancel a scheduled post. { id } -> { ok }
+	'tweet.unschedule': async ({ id }) => {
+		if (!id) throw new Error('Missing scheduled post id');
+		if (demoMode) return demo.unschedule(id);
+		const ok = await requireClient().tweet.unschedule(String(id));
+		if (!ok) throw new Error('X did not confirm cancelling the scheduled post');
+		return { ok: true };
 	},
 
 	'space.details': async ({ id }) => {
@@ -328,6 +407,46 @@ const methods = {
 
 const TWEET_ACTIONS = new Set(['like', 'unlike', 'retweet', 'unretweet', 'bookmark', 'unbookmark']);
 const MAX_ALT_TEXT = 1000; // X's limit for image descriptions
+// X's limits for the editable profile fields.
+const PROFILE_LIMITS = { name: 50, description: 160, location: 30, url: 100 };
+const PROFILE_LABELS = { name: 'Name', description: 'Bio', location: 'Location', url: 'Website' };
+
+// Seconds since the epoch from a timestamp in seconds or milliseconds.
+function toUnixSeconds(value) {
+	const n = Number(value);
+	if (!Number.isFinite(n) || n <= 0) return null;
+	return n > 1e11 ? Math.round(n / 1000) : n;
+}
+
+// Upload attachments, adding alt text after each upload and before the post. -> [{ id }]
+async function uploadMedia(tweets, items) {
+	const media = [];
+	for (const item of items) {
+		const mediaId = await tweets.upload(item.path);
+		const alt = String(item.alt || '').trim().slice(0, MAX_ALT_TEXT);
+		if (alt) await tweets.setMediaMetadata(mediaId, { altText: alt });
+		media.push({ id: mediaId });
+	}
+	return media;
+}
+
+// POST a urlencoded form to a v1.1 account endpoint; throws with X's message on failure.
+async function postForm(url, form) {
+	const res = await signedFetch(requireClient(), url, {
+		method: 'POST',
+		headers: { 'content-type': 'application/x-www-form-urlencoded' },
+		body: form.toString(),
+	});
+	if (res.ok) return;
+	const text = await res.text();
+	let message = '';
+	try {
+		message = JSON.parse(text)?.errors?.[0]?.message || '';
+	} catch {
+		message = '';
+	}
+	throw Object.assign(new Error(message || `X refused the change (HTTP ${res.status})`), { status: res.status });
+}
 
 // Snowflake ids are too big for Number; compare them as decimal strings.
 function compareIds(a, b) {
@@ -344,6 +463,10 @@ function serializeUser(user) {
 	out.youFollow = Boolean(user.isFollowed);
 	out.followsYou = Boolean(user.isFollowing);
 	out.website = legacy.entities?.url?.urls?.[0]?.expanded_url || null;
+	// Bios come with t.co links; show (and edit) the real ones.
+	for (const link of legacy.entities?.description?.urls || []) {
+		if (out.description && link.url && link.expanded_url) out.description = out.description.split(link.url).join(link.expanded_url);
+	}
 	out.protected = Boolean(legacy.protected ?? user.raw?.privacy?.protected);
 	return out;
 }

@@ -70,11 +70,29 @@ class ComposeDialog(Adw.Dialog):
         self._thumbs = Gtk.Box(spacing=8)
         body.append(self._thumbs)
 
+        # "Will post tomorrow at 09:00" with a button to go back to posting now.
+        self._schedule_info = Gtk.Box(spacing=6, visible=False, css_classes=["schedule-info"])
+        self._schedule_info.append(Gtk.Image(icon_name="alarm-symbolic"))
+        self._schedule_label = Gtk.Label(xalign=0, hexpand=True)
+        self._schedule_info.append(self._schedule_label)
+        unschedule = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="Post Now Instead")
+        unschedule.add_css_class("flat")
+        unschedule.add_css_class("circular")
+        unschedule.connect("clicked", lambda *_: self._set_schedule(None))
+        self._schedule_info.append(unschedule)
+        body.append(self._schedule_info)
+
         footer = Gtk.Box(spacing=8)
         self._add_image = Gtk.Button(icon_name="insert-image-symbolic", tooltip_text="Add Images")
         self._add_image.add_css_class("flat")
         self._add_image.connect("clicked", lambda *_: self._pick_images())
         footer.append(self._add_image)
+        # X can schedule new posts only, not replies or quotes.
+        self._schedule_at: int | None = None  # unix seconds
+        if not reply_to and not quote:
+            self._schedule_button = Gtk.MenuButton(icon_name="alarm-symbolic", tooltip_text="Schedule", popover=self._build_schedule_popover())
+            self._schedule_button.add_css_class("flat")
+            footer.append(self._schedule_button)
         footer.append(Gtk.Box(hexpand=True))
         self._counter = Gtk.Label(css_classes=["numeric", "dim-label"])
         footer.append(self._counter)
@@ -201,6 +219,93 @@ class ComposeDialog(Adw.Dialog):
         dialog.present(self)
         text.grab_focus()
 
+    # -- scheduling ---------------------------------------------------------
+
+    def _build_schedule_popover(self) -> Gtk.Popover:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+        box.append(Gtk.Label(label="Schedule Post", css_classes=["heading"]))
+        self._calendar = Gtk.Calendar()
+        box.append(self._calendar)
+
+        time_row = Gtk.Box(spacing=4, halign=Gtk.Align.CENTER)
+        time_row.append(Gtk.Label(label="Time", margin_end=8, css_classes=["dim-label"]))
+        self._hour = self._time_spin(23, "Hour")
+        self._minute = self._time_spin(59, "Minute")
+        time_row.append(self._hour)
+        time_row.append(Gtk.Label(label=":"))
+        time_row.append(self._minute)
+        box.append(time_row)
+
+        self._schedule_hint = Gtk.Label(wrap=True, max_width_chars=28, css_classes=["caption", "dim-label"])
+        box.append(self._schedule_hint)
+        confirm = Gtk.Button(label="Set Time", css_classes=["suggested-action"])
+        confirm.connect("clicked", lambda *_: self._confirm_schedule())
+        box.append(confirm)
+        self._schedule_confirm = confirm
+
+        popover = Gtk.Popover(child=box)
+        popover.connect("show", lambda *_: self._prefill_schedule())
+        for widget, signal in ((self._calendar, "day-selected"), (self._hour, "value-changed"), (self._minute, "value-changed")):
+            widget.connect(signal, lambda *_: self._sync_schedule_hint())
+        self._schedule_popover = popover
+        return popover
+
+    @staticmethod
+    def _time_spin(upper: int, name: str) -> Gtk.SpinButton:
+        spin = Gtk.SpinButton(adjustment=Gtk.Adjustment(lower=0, upper=upper, step_increment=1, page_increment=10), numeric=True, wrap=True, width_chars=2, orientation=Gtk.Orientation.VERTICAL, tooltip_text=name)
+
+        def two_digits(button):
+            button.set_text(f"{int(button.get_value()):02d}")
+            return True
+
+        spin.connect("output", two_digits)
+        return spin
+
+    def _picked_time(self) -> int:
+        day = self._calendar.get_date()
+        stamp = GLib.DateTime.new_local(day.get_year(), day.get_month(), day.get_day_of_month(), int(self._hour.get_value()), int(self._minute.get_value()), 0)
+        return stamp.to_unix()
+
+    def _prefill_schedule(self) -> None:
+        # The chosen time, or an hour from now rounded up to the next 5 minutes.
+        if self._schedule_at:
+            stamp = GLib.DateTime.new_from_unix_local(self._schedule_at)
+        else:
+            now = GLib.DateTime.new_now_local().add_minutes(60)
+            stamp = now.add_minutes((5 - now.get_minute() % 5) % 5)
+        self._calendar.select_day(stamp)
+        self._hour.set_value(stamp.get_hour())
+        self._minute.set_value(stamp.get_minute())
+        self._sync_schedule_hint()
+
+    def _schedule_problem(self, at: int) -> str | None:
+        if at < GLib.DateTime.new_now_local().to_unix() + 120:
+            return "Pick a time at least a few minutes from now."
+        return None
+
+    def _sync_schedule_hint(self) -> None:
+        at = self._picked_time()
+        problem = self._schedule_problem(at)
+        self._schedule_hint.set_label(problem or f"Posts {fmt.schedule_phrase(at)}")
+        (self._schedule_hint.add_css_class if problem else self._schedule_hint.remove_css_class)("error")
+        self._schedule_confirm.set_sensitive(problem is None)
+
+    def _confirm_schedule(self) -> None:
+        at = self._picked_time()
+        if self._schedule_problem(at) is None:
+            self._set_schedule(at)
+            self._schedule_popover.popdown()
+
+    def _set_schedule(self, at: int | None) -> None:
+        self._schedule_at = at
+        self._schedule_info.set_visible(at is not None)
+        if at is not None:
+            self._schedule_label.set_label(f"Will post {fmt.schedule_phrase(at)}")
+            self._schedule_button.add_css_class("accent")
+        elif hasattr(self, "_schedule_button"):
+            self._schedule_button.remove_css_class("accent")
+        self._post.set_label("Schedule" if at is not None else "Post")
+
     # -- submit -------------------------------------------------------------
 
     def _set_busy(self, busy: bool) -> None:
@@ -212,6 +317,9 @@ class ComposeDialog(Adw.Dialog):
         if not self._post.get_sensitive():
             return
         self._error.set_revealed(False)
+        if self._schedule_at is not None:
+            self._submit_scheduled()
+            return
         self._set_busy(True)
         params = {
             "text": self._get_text().strip(),
@@ -230,3 +338,27 @@ class ComposeDialog(Adw.Dialog):
             self._controller.on_posted(result.get("id"), (self._reply_to or {}).get("id"))
 
         self._controller.sidecar.call("tweet.post", params, done)
+
+    def _submit_scheduled(self) -> None:
+        at = self._schedule_at
+        if problem := self._schedule_problem(at):
+            self._error.set_title(problem)
+            self._error.set_revealed(True)
+            return
+        self._set_busy(True)
+        params = {
+            "text": self._get_text().strip(),
+            "media": [{"path": path, "alt": self._alts.get(path, "")} for path in self._images],
+            "at": at,
+        }
+
+        def done(_result, error):
+            self._set_busy(False)
+            if error:
+                self._error.set_title(GLib.markup_escape_text(self._controller.describe_error(error, "Couldn't schedule the post")))
+                self._error.set_revealed(True)
+                return
+            self.close()
+            self._controller.on_scheduled(at)
+
+        self._controller.sidecar.call("tweet.schedule", params, done)
