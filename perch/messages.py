@@ -7,6 +7,7 @@ from perch import images
 from perch.paged_list import PagedListView
 
 ENCRYPTED_TEXT = "Encrypted message — open X to read it"
+UNKNOWN_TEXT = "Message Perch can’t show — open X to see it"
 
 
 def _set_avatar(avatar: Adw.Avatar, url: str | None) -> None:
@@ -157,19 +158,32 @@ class InboxView(PagedListView):
 
 
 class _Bubble(Gtk.ListBoxRow):
-    def __init__(self, message: dict, mine: bool, sender: dict | None, show_sender: bool):
+    def __init__(self, message: dict, mine: bool, sender: dict | None, show_sender: bool, on_link=None):
         super().__init__(activatable=False, selectable=False)
         self.add_css_class("bubble-row")
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, halign=Gtk.Align.END if mine else Gtk.Align.START)
         if show_sender and sender:
             column.append(Gtk.Label(label=sender.get("fullName") or "", xalign=0, css_classes=["caption", "dim-label"]))
 
-        encrypted = message.get("isEncrypted") and not message.get("text")
-        text = ENCRYPTED_TEXT if encrypted else (message.get("text") or ("📎 Attachment" if message.get("mediaUrls") else ""))
-        body = Gtk.Label(label=text, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, selectable=not encrypted, max_width_chars=48)
+        text = message.get("text") or ""
+        encrypted = message.get("isEncrypted") and not text
+        # Something X sent that Perch can't show (no text, media or encryption flag): say so rather
+        # than drawing an empty bubble.
+        unknown = not encrypted and not text and not message.get("mediaUrls")
+        body = Gtk.Label(xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, selectable=not (encrypted or unknown), max_width_chars=48)
+        if encrypted:
+            body.set_label(ENCRYPTED_TEXT)
+        elif unknown:
+            body.set_label(UNKNOWN_TEXT)
+        elif text:
+            body.set_markup(fmt.tweet_markup(text))  # links, @mentions and #tags are clickable
+            if on_link:
+                body.connect("activate-link", lambda _label, uri: on_link(uri))
+        else:
+            body.set_label("📎 Attachment")
         body.add_css_class("bubble")
         body.add_css_class("mine" if mine else "theirs")
-        if encrypted:
+        if encrypted or unknown:
             body.add_css_class("encrypted")
         column.append(body)
 
@@ -286,7 +300,9 @@ class ConversationPage(Adw.NavigationPage):
         self._message_ids.add(message["id"])
         sender_id = message.get("senderId")
         mine = sender_id == self._controller.me_id
-        bubble = _Bubble(message, mine, self._users.get(sender_id), show_sender=self._is_group and not mine and sender_id != self._last_sender)
+        bubble = _Bubble(message, mine, self._users.get(sender_id), show_sender=self._is_group and not mine and sender_id != self._last_sender,
+            on_link=self._controller.open_link,
+        )
         self._last_sender = sender_id
         self._list.append(bubble)
         return bubble

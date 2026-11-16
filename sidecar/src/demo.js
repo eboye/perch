@@ -111,7 +111,7 @@ function notifications(cursor) {
 
 const conversations = [
 	['1001-1002', users[1], ['Did you see the new libadwaita release?', 'Yes! The breakpoints work great.', 'Want to pair on Perch later?'], 4, true],
-	['1001-1003', users[2], ['Thanks for the review 🙏', 'Anytime'], 80, false],
+	['1001-1003', users[2], ['Thanks for the review 🙏', 'https://www.youtube.com/watch?v=abcdefghijk', 'Anytime'], 80, false],
 	['1001-1005', users[4], ['Space tonight at 8?'], 600, false],
 ];
 
@@ -146,6 +146,8 @@ function conversation(id) {
 		mediaUrls: [],
 	}));
 	messages.splice(1, 0, { id: `${cid}-enc`, senderId: other.id, text: '', createdAt: iso(minutes + 30), isEncrypted: true, mediaUrls: [] });
+	// A message type Perch can't show (no text, no media, not encrypted).
+	if (cid === '1001-1003') messages.push({ id: `${cid}-blank`, senderId: other.id, text: '', createdAt: iso(minutes + 1), isEncrypted: false, mediaUrls: [] });
 	messages.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 	return { id: cid, messages, hasMore: false, cursor: '', participants: [users[0].id, other.id], users: usersById() };
 }

@@ -132,6 +132,11 @@
   border-bottom-right-radius: 6px;
 }
 
+/* Links in your own (accent-coloured) bubbles: the bubble's text colour, underlined. */
+.bubble.mine link {
+  color: var(--accent-fg-color);
+}
+
 .bubble.encrypted {
   font-style: italic;
   opacity: 0.7;

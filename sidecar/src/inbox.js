@@ -8,7 +8,11 @@ const { randomUUID } = require('node:crypto');
 const { ResourceType } = require('rettiwt-api/dist/enums/Resource');
 const { Extractors } = require('rettiwt-api/dist/collections/Extractors');
 const { signedFetch } = require('./xhttp');
+const dmlinks = require('./dmlinks');
 const demo = require('./demo');
+
+// Shared-link-only messages decode as empty in rettiwt; recover their URLs.
+dmlinks.install();
 
 // id -> plain user ({ id, fullName, userName, profileImage, isVerified }), shared by notifications and DMs.
 const userCache = new Map();
