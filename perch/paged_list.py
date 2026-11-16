@@ -73,6 +73,7 @@ class PagedListView(Gtk.Stack):
         overlay = Gtk.Overlay(child=self._scroller)
         self._new_posts = Gtk.Button(halign=Gtk.Align.CENTER, valign=Gtk.Align.START, margin_top=10, visible=False, css_classes=["pill", "suggested-action", "new-posts"])
         self._new_posts.connect("clicked", lambda *_: self._show_new_posts())
+        self._new_posts_loading = False
         overlay.add_overlay(self._new_posts)
         self.add_named(overlay, "list")
         self.set_visible_child_name("loading")
@@ -193,9 +194,44 @@ class PagedListView(Gtk.Stack):
         self._new_posts.set_visible(True)
 
     def _show_new_posts(self) -> None:
+        """Add the new posts above the ones already shown (no full reload), with a spinner in the
+        pill meanwhile. The first page normally comes from the cache the poll just filled."""
+        if self._new_posts_loading:
+            return
+        self._new_posts_loading = True
+        busy = Gtk.Box(spacing=8)
+        busy.append(Adw.Spinner(width_request=16, height_request=16))
+        busy.append(Gtk.Label(label="Loading…"))
+        self._new_posts.set_child(busy)
+        generation = self._generation
+        self.fetch_page(None, lambda result, error: self._on_new_posts(generation, result, error))
+
+    def _on_new_posts(self, generation: int, result: dict | None, error) -> None:
+        self._new_posts_loading = False
         self._new_posts.set_visible(False)
+        if generation != self._generation:
+            return  # the list was reloaded meanwhile
+        if error:
+            self.emit("load-failed", error)
+            return
+        items = result.get("list") or []
+        # Everything above the first post already shown is new. If none of the page is shown yet,
+        # more came in than one page holds: there'd be a gap, so start over instead.
+        first_known = next((index for index, item in enumerate(items) if self.item_id(item) in self._seen), None)
+        if first_known is None:
+            self.reload()
+            return
+        position = 0
+        for item in items[:first_known]:
+            key = self.item_id(item)
+            if not key or key in self._seen:
+                continue
+            self._seen.add(key)
+            row = self.make_row(item, result)
+            self._list.insert(row, position)
+            self._filter_row(row)
+            position += 1
         self.scroll_to_top()
-        self.reload()  # the poll's result is still cached, so this doesn't ask X again
 
     # -- keyboard navigation (see window._on_key) ------------------------------
 
