@@ -10,7 +10,7 @@ replaced by a reload stayed in memory for good. Perch runs for days, so that add
 handlers in it (and on the actions Perch attached to it).
 """
 
-from gi.repository import Adw, GObject, Gtk
+from gi.repository import Adw, GLib, GObject, Gtk
 
 # GTK / libadwaita parts that disconnect their own handlers while being destroyed (Perch connects
 # nothing to them): leave their handlers alone, or GLib warns "no handler with id".
@@ -46,9 +46,15 @@ def _disconnect_signals(instance, names) -> None:
 
 def release(widget: Gtk.Widget | None) -> None:
     """Drop every signal handler in ``widget``'s tree. Only for widgets that are gone for good
-    (popped pages, rows removed from a list): they won't react to anything afterwards."""
-    if widget is None:
-        return
+    (popped pages, rows removed from a list): they won't react to anything afterwards.
+
+    The work waits until GTK is idle: a page is often popped by an event still travelling through
+    it (a click on its own back button), and removing controllers GTK is running crashes it."""
+    if widget is not None:
+        GLib.idle_add(lambda: _release_now(widget) or GLib.SOURCE_REMOVE)
+
+
+def _release_now(widget: Gtk.Widget) -> None:
     stack = [widget]
     while stack:
         current = stack.pop()
