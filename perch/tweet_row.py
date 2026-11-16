@@ -30,7 +30,21 @@ def link_to_profile(widget: Gtk.Widget, user: dict, controller) -> None:
     click.connect("released", lambda *_: controller.open_profile(user))
     widget.add_controller(click)
     widget.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
-    widget.set_tooltip_text(f"View @{user['userName']}’s profile")
+    label = f"View @{user['userName']}’s profile"
+    widget.set_tooltip_text(label)
+    # Keyboard and screen readers: reachable with Tab, Enter / Space open it, and it says where it goes.
+    widget.set_focusable(True)
+    widget.update_property([Gtk.AccessibleProperty.LABEL], [label])
+    keys = Gtk.EventControllerKey()
+
+    def on_key(_controller, keyval, _keycode, _state) -> bool:
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            controller.open_profile(user)
+            return True
+        return False
+
+    keys.connect("key-pressed", on_key)
+    widget.add_controller(keys)
 
 
 def _post_menu(tweet: dict, controller, on_deleted, on_translate=None) -> Gtk.MenuButton:
@@ -101,16 +115,49 @@ def _header(user: dict, created_at: str | None, controller=None, edited: bool = 
     return box
 
 
-def _body(tweet: dict, controller=None) -> Gtk.Label | None:
+# Space between paragraphs, and between list items / a list and its lead-in line (px).
+PARAGRAPH_GAP = 10
+LINE_GAP = 2
+
+
+def _body(tweet: dict, controller=None) -> Gtk.Widget | None:
+    """The post's text: paragraphs, and list items whose wrapped lines hang under their own text
+    (not under the bullet)."""
     strip = bool(tweet.get("media") or tweet.get("quoted"))
-    markup = fmt.tweet_markup(tweet.get("fullText", ""), strip_trailing_link=strip)
-    if not markup:
+    text = fmt.clean_post_text(tweet.get("fullText", ""), strip_trailing_link=strip)
+    if not text:
         return None
-    body = _label("", "tweet-text", wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, use_markup=True)
-    body.set_markup(markup)
-    if controller is not None and hasattr(controller, "open_link"):
-        # @mentions and x.com post/profile links open inside Perch; anything else in the browser.
-        body.connect("activate-link", lambda _label, uri: controller.open_link(uri))
+    blocks = fmt.post_blocks(text)
+    markers = [marker for kind, _text, marker in blocks if kind == "item"]
+    marker_chars = max((len(m) for m in markers), default=1)
+
+    def text_label(content: str) -> Gtk.Label:
+        label = _label("", "tweet-text", wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, use_markup=True, hexpand=True)
+        label.set_markup(fmt.tweet_markup(content))
+        if controller is not None and hasattr(controller, "open_link"):
+            # @mentions and x.com post/profile links open inside Perch; anything else in the browser.
+            label.connect("activate-link", lambda _label, uri: controller.open_link(uri))
+        return label
+
+    body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, css_classes=["tweet-body"])
+    gap = False
+    for kind, content, marker in blocks:
+        if kind == "gap":
+            gap = True
+            continue
+        if kind == "item":
+            row = Gtk.Box(spacing=6)
+            bullet = _label(marker, "tweet-text", "list-marker", valign=Gtk.Align.START, width_chars=marker_chars)
+            bullet.set_xalign(1)  # numbers line up on their right edge
+            row.append(bullet)
+            row.append(text_label(content))
+            widget = row
+        else:
+            widget = text_label(content)
+        if body.get_first_child() is not None:
+            widget.set_margin_top(PARAGRAPH_GAP if gap else LINE_GAP)
+        gap = False
+        body.append(widget)
     return body
 
 
@@ -296,11 +343,19 @@ class _CountButton(Gtk.Button):
         self._count = _label("", "numeric")
         box.append(self._count)
         self.set_child(box)
+        self.connect("notify::tooltip-text", lambda *_: self._sync_name())
 
     def update(self, count, active: bool = False) -> None:
         self._count.set_label(fmt.compact_count(count))
         if self._active_class:
             (self.add_css_class if active else self.remove_css_class)(self._active_class)
+        self._sync_name()
+
+    def _sync_name(self) -> None:
+        """What a screen reader announces: the action and its count ("Like, 131"), not just "131"."""
+        action = self.get_tooltip_text() or ""
+        count = self._count.get_label()
+        self.update_property([Gtk.AccessibleProperty.LABEL], [f"{action}, {count}" if count else action])
 
 
 class ActionBar(Gtk.Box):

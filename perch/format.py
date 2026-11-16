@@ -15,14 +15,46 @@ def _attr(value: str) -> str:
     return GLib.markup_escape_text(value).replace('"', "&quot;")
 
 
-def tweet_markup(text: str, strip_trailing_link: bool = False) -> str:
-    """Pango markup for a tweet body with links for URLs, @mentions and #hashtags."""
+def clean_post_text(text: str, strip_trailing_link: bool = False) -> str:
+    """A post's text, unescaped and tidied: no spaces at line ends, at most one blank line between
+    paragraphs, and (for posts with media or a quote) without X's trailing t.co link."""
     text = html.unescape(text or "")
-    # Tidy the layout: no spaces at line ends, and at most one blank line between paragraphs.
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     if strip_trailing_link:
         text = _TRAILING_TCO.sub("", text)
+    return text.strip()
+
+
+# A list item: "- x", "• x", "* x", "– x", "1. x", "1) x".
+_LIST_ITEM = re.compile(r"^\s*([-•*–]|\d{1,3}[.)])\s+(\S.*)$")
+
+
+def post_blocks(text: str) -> list[tuple[str, str, str]]:
+    """Split cleaned post text into blocks for layout: ("text", lines, "") for running text and
+    ("item", text, marker) for each list item; ("gap", "", "") marks a paragraph break."""
+    blocks: list[tuple[str, str, str]] = []
+    for index, paragraph in enumerate(text.split("\n\n")):
+        if index:
+            blocks.append(("gap", "", ""))
+        lines: list[str] = []
+        for line in paragraph.split("\n"):
+            if item := _LIST_ITEM.match(line):
+                if lines:
+                    blocks.append(("text", "\n".join(lines), ""))
+                    lines = []
+                marker = "•" if item.group(1) in "-•*–" else item.group(1)
+                blocks.append(("item", item.group(2), marker))
+            else:
+                lines.append(line)
+        if lines:
+            blocks.append(("text", "\n".join(lines), ""))
+    return blocks
+
+
+def tweet_markup(text: str, strip_trailing_link: bool = False) -> str:
+    """Pango markup for a tweet body with links for URLs, @mentions and #hashtags."""
+    text = clean_post_text(text, strip_trailing_link)
     out, pos = [], 0
     for match in _TOKEN.finditer(text):
         out.append(GLib.markup_escape_text(text[pos : match.start()]))
@@ -151,6 +183,8 @@ _RESERVED = {
 def x_link_target(uri: str) -> tuple[str, str] | None:
     """Where an X link points, if Perch can show it: ("profile", handle), ("post", id),
     ("space", id) or ("search", query) for hashtag and search links."""
+    if (uri or "").lower().startswith("twitter://"):
+        return _app_link_target(uri)
     match = _X_HOST.match(uri or "")
     if not match:
         return None
@@ -180,6 +214,20 @@ def profile_banner_url(url: str | None) -> str | None:
 
 def profile_avatar_url(url: str | None) -> str | None:
     return url.replace("_normal.", "_400x400.") if url else None
+
+
+def _app_link_target(uri: str) -> tuple[str, str] | None:
+    """twitter:// app links (twitter://user?screen_name=…, twitter://status?id=…, twitter://search?query=…)."""
+    parsed = urlparse(uri)
+    params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+    kind = (parsed.netloc or parsed.path.lstrip("/")).lower()
+    if kind == "user" and params.get("screen_name"):
+        return "profile", params["screen_name"]
+    if kind == "status" and params.get("id", "").isdigit():
+        return "post", params["id"]
+    if kind == "search" and params.get("query"):
+        return "search", params["query"]
+    return None
 
 
 _SPACE_URL = re.compile(r"(?:x|twitter)\.com/i/spaces/(\w+)")

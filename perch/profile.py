@@ -13,6 +13,10 @@ TABS = (("posts", "Posts"), ("replies", "Replies"), ("media", "Media"))
 OWN_TABS = TABS + (("likes", "Likes"),)
 
 
+def _count_markup(count, word: str) -> str:
+    return f"<b>{count or 0:,}</b> {word}"
+
+
 def _counts_markup(user: dict) -> str:
     """Following / Followers (links to those lists) and the post count."""
     return (
@@ -197,14 +201,28 @@ class ProfilePage(Adw.NavigationPage):
             meta.append(self._meta_item("x-office-calendar-symbolic", GLib.markup_escape_text(joined)))
         info.append(meta)
 
-        counts = Gtk.Label(xalign=0, use_markup=True, margin_top=2)
-        counts.set_markup(_counts_markup(user))
-        counts.add_css_class("profile-counts")
-        counts.connect("activate-link", self._on_count_link)
-        self._counts = counts
+        # Following / Followers are buttons (screen readers name them; links in a label they don't).
+        counts = Gtk.Box(spacing=14, margin_top=2, css_classes=["profile-counts"])
+        self._count_buttons = {}
+        for kind, word, tooltip in (("following", "Following", "See who they follow"), ("followers", "Followers", "See their followers")):
+            text = Gtk.Label(use_markup=True)
+            button = Gtk.Button(child=text, tooltip_text=tooltip, css_classes=["flat", "count-link"])
+            button.connect("clicked", lambda *_, k=kind: self.user and self._controller.open_connections(self.user, k))
+            counts.append(button)
+            self._count_buttons[kind] = (button, text, word)
+        self._posts_count = Gtk.Label(use_markup=True)
+        counts.append(self._posts_count)
+        self._sync_counts(user)
         info.append(counts)
         card.append(info)
         return card
+
+    def _sync_counts(self, user: dict) -> None:
+        for kind, (button, text, word) in self._count_buttons.items():
+            count = user.get("followingsCount" if kind == "following" else "followersCount") or 0
+            text.set_markup(_count_markup(count, word))
+            button.update_property([Gtk.AccessibleProperty.LABEL], [f"{count:,} {word}"])
+        self._posts_count.set_markup(_count_markup(user.get("statusesCount"), "Posts"))
 
     def _on_count_link(self, _label, uri: str) -> bool:
         if uri.startswith("perch:") and self.user:
@@ -305,7 +323,7 @@ class ProfilePage(Adw.NavigationPage):
         def apply(following: bool, count: int) -> None:
             user["youFollow"], user["followersCount"] = following, count
             self._sync_follow_button(button, following)
-            self._counts.set_markup(_counts_markup(user))
+            self._sync_counts(user)
 
         apply(follow, max(0, before_count + (1 if follow else -1)))  # optimistic
         button.set_sensitive(False)

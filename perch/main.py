@@ -21,7 +21,8 @@ class PerchApplication(Adw.Application):
     activates app.quit when an app exports it), Ctrl+Q, or Quit in the main menu."""
 
     def __init__(self):
-        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        # HANDLES_OPEN: `perch <x.com or twitter:// link>` opens it in the running Perch.
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_OPEN)
         self.sidecar = Sidecar()
         self.quitting = False
         self._main_window: PerchWindow | None = None
@@ -136,6 +137,13 @@ class PerchApplication(Adw.Application):
         if self._main_window is None:
             self._main_window = PerchWindow(self, self.sidecar)
         return self._main_window
+
+    def do_open(self, files, _n_files, _hint):
+        """Links handed to Perch (command line, the twitter:// scheme): open them inside the app."""
+        window = self._window()
+        window.present()
+        for file in files:
+            window.open_external_link(file.get_uri())
 
     def do_activate(self):
         # Also what launching Perch again ends up calling: bring the (minimized) window back.

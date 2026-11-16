@@ -1,18 +1,19 @@
 [Desktop Entry]
 Name=Perch
 Comment=A GTK client for X
-Exec=perch
+Exec=perch %U
 Icon=io.github.eboye.Perch
 Terminal=false
 Type=Application
 Categories=Network;GTK;
 Keywords=x;twitter;timeline;social;
 StartupNotify=true
+MimeType=x-scheme-handler/twitter;
 DBusActivatable=false
 Actions=quit;
 
-# Closing Perch's window only hides it; this entry on the dock icon's right-click menu quits it
-# for good, and is there even while Perch runs without a window.
+# Closing Perch's window only minimizes it to the dock; this entry on the dock icon's right-click
+# menu quits it for good.
 [Desktop Action quit]
 Name=Quit Completely
 Exec=perch --quit

@@ -22,7 +22,7 @@ from perch.profile_edit import ProfileEditDialog
 from perch.scheduled import ScheduledPage
 from perch.search import SearchPage
 from perch.launcher import LauncherBadge
-from perch.lifecycle import release
+from perch.lifecycle import release, release_dialog
 from perch.list_tab import ListTabView
 from perch.preferences import PreferencesDialog
 from perch.quotes import QuotesPage
@@ -61,6 +61,7 @@ class PerchWindow(Adw.ApplicationWindow):
         self._stale_toast_at = -60_000_000
         self._muted_patterns: list = []  # compiled muted words (see on_muted_words)
         self._restoring_tabs = False  # rebuilding tabs for an account (see on_account_ready)
+        self._pending_link: str | None = None  # a link handed to Perch before it was signed in
         self._adding_from: str | None = None  # account id while "Add Account…" is showing the sign-in page
         self._signin_attempted = False  # a key was tried while adding (the sidecar must be re-signed)
         sidecar.on_stale = self._on_stale
@@ -217,6 +218,7 @@ class PerchWindow(Adw.ApplicationWindow):
             people.append("Muted Words", "win.muted-words")
             self._menu.append_section(None, people)
         actions = Gio.Menu()
+        actions.append("Open X Link…", "win.open-link")
         actions.append("Open Space…", "win.open-space")
         actions.append("Preferences", "win.preferences")
         actions.append("Keyboard Shortcuts", "win.shortcuts")
@@ -325,6 +327,7 @@ class PerchWindow(Adw.ApplicationWindow):
             ("add-account", lambda: self.add_account()),
             ("shortcuts", lambda: self._show_shortcuts()),
             ("preferences", lambda: self._present_releasing(PreferencesDialog(self))),
+            ("open-link", lambda: self.open_x_link_dialog()),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
@@ -348,6 +351,7 @@ class PerchWindow(Adw.ApplicationWindow):
         app.set_accels_for_action("win.search", ["<Control>f"])
         app.set_accels_for_action("win.shortcuts", ["<Control>question"])
         app.set_accels_for_action("win.preferences", ["<Control>comma"])
+        app.set_accels_for_action("win.open-link", ["<Control>l"])
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
         self.add_controller(keys)
@@ -432,6 +436,8 @@ class PerchWindow(Adw.ApplicationWindow):
         for title, accel in (
             ("New post", "<Control>n"),
             ("Search", "<Control>f"),
+            ("Open an X link", "<Control>l"),
+            ("Preferences", "<Control>comma"),
             ("Refresh", "<Control>r"),
             ("Post (in the compose box)", "<Control>Return"),
             ("Keyboard shortcuts", "<Control>question"),
@@ -465,7 +471,7 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def _present_releasing(self, dialog: Adw.Dialog) -> None:
         """Show a dialog and free it once closed (after its own 'closed' handlers have run)."""
-        dialog.connect("closed", lambda d: GLib.idle_add(lambda: release(d) or GLib.SOURCE_REMOVE))
+        dialog.connect("closed", lambda d: GLib.idle_add(lambda: release_dialog(d) or GLib.SOURCE_REMOVE))
         dialog.present(self)
 
     def open_space(self, space_id: str) -> None:
@@ -782,6 +788,51 @@ class PerchWindow(Adw.ApplicationWindow):
 
         dialog.connect("response", on_response)
         dialog.present(self)
+
+    # -- links from outside Perch ----------------------------------------------
+
+    def open_external_link(self, uri: str) -> None:
+        """A link handed to Perch (command line, twitter://): open it once signed in."""
+        if not self._signed_in():
+            self._pending_link = uri  # opened by the sign-in (see _sign_in)
+            return
+        if not self.open_link(uri):
+            self.toast("That isn't a link Perch can open")
+
+    def open_x_link_dialog(self) -> None:
+        """Paste an x.com / twitter.com link to open it in Perch (prefilled from the clipboard)."""
+        if not self._signed_in():
+            return
+        entry = Gtk.Entry(placeholder_text="https://x.com/…", activates_default=True, hexpand=True)
+        dialog = Adw.AlertDialog(heading="Open X Link", body="A post, profile, Space or search link from x.com or twitter.com.", extra_child=entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("open", "Open")
+        dialog.set_response_appearance("open", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("open")
+        dialog.set_close_response("cancel")
+
+        def sync(*_):
+            dialog.set_response_enabled("open", fmt.x_link_target(entry.get_text().strip()) is not None)
+
+        def on_response(_dialog, response):
+            if response == "open":
+                self.open_link(entry.get_text().strip())
+
+        def pasted(clipboard, result):
+            try:
+                text = (clipboard.read_text_finish(result) or "").strip()
+            except GLib.Error:
+                return
+            if fmt.x_link_target(text) and not entry.get_text():
+                entry.set_text(text)
+                entry.select_region(0, -1)
+
+        entry.connect("changed", sync)
+        sync()
+        self.get_display().get_clipboard().read_text_async(None, pasted)
+        dialog.connect("response", on_response)
+        self._present_releasing(dialog)
+        entry.grab_focus()
 
     def open_quotes(self, tweet: dict) -> None:
         """The posts quoting ``tweet``."""
@@ -1217,6 +1268,9 @@ class PerchWindow(Adw.ApplicationWindow):
             self._ensure_loaded()
             self.load_muted_words()
             self._poller.start()
+            if self._pending_link:
+                link, self._pending_link = self._pending_link, None
+                self.open_external_link(link)
 
         def on_init(_result, error: RpcError | None):
             if error:

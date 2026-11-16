@@ -149,6 +149,25 @@
   color: var(--accent-fg-color);
 }
 
+/* Secondary text (handles, times, counts, captions): libadwaita's 0.55 opacity is 3.2:1 on the
+   light background, below WCAG AA (4.5:1) for normal-size text; 0.7 is 4.9:1 and still reads as
+   secondary. */
+.dim-label,
+.dimmed {
+  opacity: 0.7;
+}
+
+/* Profile Following / Followers: buttons that look like the links they replace. */
+button.count-link {
+  min-height: 0;
+  padding: 2px 4px;
+  margin: 0 -4px;
+}
+
+button.count-link:hover label {
+  text-decoration: underline;
+}
+
 /* Notifications: an excerpt of the post a like / repost / reply is about. */
 .notification-post {
   border-left: 3px solid alpha(currentColor, 0.15);
