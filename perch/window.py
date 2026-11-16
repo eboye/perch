@@ -22,7 +22,9 @@ from perch.profile_edit import ProfileEditDialog
 from perch.scheduled import ScheduledPage
 from perch.search import SearchPage
 from perch.launcher import LauncherBadge
+from perch.lifecycle import release
 from perch.list_tab import ListTabView
+from perch.preferences import PreferencesDialog
 from perch.quotes import QuotesPage
 from perch.lists import AddToListDialog, BookmarksPage, ListPage, ListsPage
 from perch.timeline import TimelineView
@@ -182,6 +184,8 @@ class PerchWindow(Adw.ApplicationWindow):
 
         # Conversations (and anything else that needs a back button) are pushed on top of "home".
         self._nav = Adw.NavigationView()
+        # A page that's been gone back from is never shown again (pages are made fresh): free it.
+        self._nav.connect("popped", lambda _nav, page: release(page))
         self._nav.add(Adw.NavigationPage(child=view, title=APP_NAME, tag="home"))
         return self._nav
 
@@ -214,7 +218,7 @@ class PerchWindow(Adw.ApplicationWindow):
             self._menu.append_section(None, people)
         actions = Gio.Menu()
         actions.append("Open Space…", "win.open-space")
-        actions.append("Desktop Notifications", "win.desktop-notifications")
+        actions.append("Preferences", "win.preferences")
         actions.append("Keyboard Shortcuts", "win.shortcuts")
         actions.append(f"About {APP_NAME}", "app.about")
         self._menu.append_section(None, actions)
@@ -281,7 +285,25 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def _sync_dock_badge(self) -> None:
         total = sum(self._stack.get_page(self._views[name]).get_badge_number() for name in ("notifications", "messages"))
-        self._badge.set_count(total)
+        self._badge.set_count(total if settings.get("dock_badge") else 0)
+
+    # -- preferences ------------------------------------------------------------
+
+    def on_poll_interval_changed(self) -> None:
+        self._poller.set_interval(int(settings.get("poll_minutes")) * 60)
+
+    def on_saved_data_cleared(self) -> None:
+        """The sidecar forgot its saved copies: reload what's on screen straight from X."""
+        self._refresh()
+        self.toast("Cleared — loading fresh from X")
+
+    def on_dock_badge_changed(self) -> None:
+        self._sync_dock_badge()
+
+    def on_desktop_notifications_changed(self, on: bool) -> None:
+        action = self.lookup_action("desktop-notifications")
+        if action is not None:
+            action.set_state(GLib.Variant.new_boolean(on))
 
     # -- actions ------------------------------------------------------------
 
@@ -302,6 +324,7 @@ class PerchWindow(Adw.ApplicationWindow):
             ("muted-words", lambda: self.open_muted_words()),
             ("add-account", lambda: self.add_account()),
             ("shortcuts", lambda: self._show_shortcuts()),
+            ("preferences", lambda: self._present_releasing(PreferencesDialog(self))),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
@@ -324,6 +347,7 @@ class PerchWindow(Adw.ApplicationWindow):
         app.set_accels_for_action("win.compose", ["<Control>n"])
         app.set_accels_for_action("win.search", ["<Control>f"])
         app.set_accels_for_action("win.shortcuts", ["<Control>question"])
+        app.set_accels_for_action("win.preferences", ["<Control>comma"])
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
         self.add_controller(keys)
@@ -437,11 +461,16 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def compose(self, reply_to: dict | None = None, quote: dict | None = None) -> None:
         if self._signed_in():
-            ComposeDialog(self, reply_to=reply_to, quote=quote).present(self)
+            self._present_releasing(ComposeDialog(self, reply_to=reply_to, quote=quote))
+
+    def _present_releasing(self, dialog: Adw.Dialog) -> None:
+        """Show a dialog and free it once closed (after its own 'closed' handlers have run)."""
+        dialog.connect("closed", lambda d: GLib.idle_add(lambda: release(d) or GLib.SOURCE_REMOVE))
+        dialog.present(self)
 
     def open_space(self, space_id: str) -> None:
         if self._signed_in():
-            SpaceDialog(self, space_id).present(self)
+            self._present_releasing(SpaceDialog(self, space_id))
 
     def open_conversation(self, conversation: dict, users: dict) -> None:
         tag = f"dm-{conversation['id']}"
@@ -481,6 +510,8 @@ class PerchWindow(Adw.ApplicationWindow):
         kind, value = target
         if kind == "profile":
             self.open_profile(value)
+        elif kind == "space":
+            self.open_space(value)
         elif kind == "search":
             self.open_search(value, mode="latest" if value.startswith("#") else None)
         else:
@@ -517,7 +548,7 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def edit_profile(self, user: dict) -> None:
         if self._signed_in() and user.get("id") == self.me_id:
-            ProfileEditDialog(self, user).present(self)
+            self._present_releasing(ProfileEditDialog(self, user))
 
     def on_profile_updated(self, quiet: bool = False) -> None:
         """Your profile changed on X: refresh the signed-in account and any open copy of your profile."""
@@ -620,7 +651,9 @@ class PerchWindow(Adw.ApplicationWindow):
         """One tab per pinned list of the signed-in account, after Following / For You / … ."""
         current = self._current_tab()
         for name in [n for n in self._views if n.startswith("list-")]:
-            self._stack.remove(self._views.pop(name))
+            view = self._views.pop(name)
+            self._stack.remove(view)
+            release(view)
         for lst in self._pinned_lists():
             name = f"list-{lst['id']}"
             view = ListTabView(self, lst)
@@ -633,7 +666,8 @@ class PerchWindow(Adw.ApplicationWindow):
     def on_account_ready(self) -> None:
         """Signed in (or switched account): that account's pinned lists become tabs, and the tab it
         was last on is shown again."""
-        last = settings.account_get("last_tab")
+        start = settings.get("start_tab") or "last"
+        last = settings.account_get("last_tab") if start == "last" else start
         self._restoring_tabs = True
         try:
             self._rebuild_list_tabs()
@@ -791,7 +825,7 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def add_to_list(self, user: dict) -> None:
         if self._signed_in() and user.get("id"):
-            AddToListDialog(self, user).present(self)
+            self._present_releasing(AddToListDialog(self, user))
 
     def on_lists_changed(self) -> None:
         """A list was created, edited, deleted or had members changed: refresh the Lists page."""

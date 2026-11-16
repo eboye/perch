@@ -2,6 +2,7 @@
 
 import base64
 import re
+import weakref
 from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Pango
@@ -213,7 +214,9 @@ class _Bubble(Gtk.ListBoxRow):
         self.add_css_class("bubble-row")
         self.message = message
         self._mine = mine
-        self._actions = actions
+        # Weak: the page owns its bubbles; a strong reference back would keep a closed conversation
+        # in memory (see lifecycle.py).
+        self._actions = weakref.proxy(actions) if actions is not None else None
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, halign=Gtk.Align.END if mine else Gtk.Align.START)
         self._column = column
         if show_sender and sender:
@@ -425,6 +428,7 @@ class ConversationPage(Adw.NavigationPage):
         delete.connect("activate", lambda *_: controller.delete_conversation(self.conversation_id, title))
         actions.add_action(delete)
         more.insert_action_group("conversation", actions)
+        more.releasable = [delete]  # its callback refers to this page (see lifecycle.py)
         header.pack_end(more)
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh")
         refresh.connect("clicked", lambda *_: controller.sidecar.fresh(self.reload))

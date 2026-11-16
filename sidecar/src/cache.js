@@ -80,7 +80,7 @@ const INVALIDATES = {
 	'mutedWords.remove': ['mutedWords.list'],
 };
 // Calls that never touch the cache.
-const PASS_THROUGH = new Set(['ping', 'space.details', 'space.stream', 'dm.media']);
+const PASS_THROUGH = new Set(['ping', 'space.details', 'space.stream', 'dm.media', 'cache.stats', 'cache.clear']);
 
 // like / unlike / retweet / unretweet / bookmark / unbookmark -> [flag, count field, value]
 const TWEET_ACTIONS = {
@@ -115,6 +115,13 @@ class ResponseCache {
 		this.entries = new Map(); // key -> { method, value, at }
 		this.inflight = new Map(); // key -> Promise
 		this.generation = 0; // bumps on every invalidation, so a request that raced a write isn't stored
+	}
+
+	// { entries, oldestSeconds } for Preferences.
+	stats() {
+		let oldest = null;
+		for (const entry of this.entries.values()) oldest = oldest === null ? entry.at : Math.min(oldest, entry.at);
+		return { entries: this.entries.size, oldestSeconds: oldest === null ? 0 : Math.round((this.now() - oldest) / 1000) };
 	}
 
 	clear() {

@@ -88,22 +88,32 @@ const iso = (minutesAgo) => new Date(Date.now() - minutesAgo * 60000).toISOStrin
 
 function notifications(cursor) {
 	if (cursor) return { list: [], next: '', users: usersById() };
+	// The links X sends with each kind (a follow links the person; new posts from someone you get
+	// notifications for, an internal API path; a Space, its page).
+	const notificationUrls = {
+		person_icon: `https://twitter.com/${users[4].userName}`,
+		recommendation_icon: '/2/notifications/device_follow.json',
+		live_icon: 'https://x.com/i/spaces/1demoSpace',
+	};
+	// Two separate likes on the same post (900000): Perch shows them as one row.
 	const rows = [
-		['bell_icon', [users[1], users[2], users[4]], 'Linus Ortega, Mira Chen and 1 other liked your post', 3],
-		['bird_icon', [users[3]], 'GNOME Fan Club reposted your post', 18],
-		['recommendation_icon', [users[2]], 'New post notifications for Mira Chen', 64],
-		['live_icon', [users[3]], 'GNOME Fan Club is hosting a Space: GTK app design hangout', 95],
-		['bell_icon', [users[4]], 'Sam Okafor followed you', 300],
+		['heart_icon', [users[1], users[2]], 'Linus Ortega and Mira Chen liked your post', 3, '900000'],
+		['retweet_icon', [users[3]], 'GNOME Fan Club reposted your post', 18, '900007'],
+		['heart_icon', [users[4]], 'Sam Okafor liked your post', 40, '900000'],
+		['recommendation_icon', [users[2]], 'New post notifications for Mira Chen', 64, null],
+		['live_icon', [users[3]], 'GNOME Fan Club is hosting a Space: GTK app design hangout', 95, null],
+		['person_icon', [users[4]], 'Sam Okafor followed you', 300, null],
 	];
 	return {
-		list: rows.map(([icon, from, message, minutes], i) => ({
+		list: rows.map(([icon, from, message, minutes, post], i) => ({
 			id: `demo-n${i}`,
 			message,
 			receivedAt: iso(minutes),
 			from: from.map((u) => u.id),
-			target: [],
+			target: post ? [post] : [],
 			icon,
-			url: 'https://x.com/notifications',
+			url: notificationUrls[icon] || 'https://x.com/notifications',
+			postText: post ? texts[(Number(post) - 900000) / 7 % texts.length] : null,
 		})),
 		next: '',
 		users: usersById(),

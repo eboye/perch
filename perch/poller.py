@@ -7,6 +7,16 @@ from perch import APP_ID, settings
 from perch.messages import conversation_title, message_preview
 
 POLL_SECONDS = 120
+# notification_icon -> the Preferences switch that decides whether it gets a desktop notification.
+_ALERT_KINDS = {"heart_icon": "notify_likes", "retweet_icon": "notify_reposts", "person_icon": "notify_follows"}
+
+
+def alert_setting(icon: str | None) -> str:
+    return _ALERT_KINDS.get(icon or "", "notify_other")
+
+# When X rate-limits us or the network is down, the gap doubles up to this, and goes back to the
+# normal interval after the first good round (hammering X while it says "slow down" prolongs it).
+MAX_BACKOFF_SECONDS = 16 * 60
 MAX_INDIVIDUAL = 3  # more new items than this collapse into one summary notification
 
 
@@ -18,11 +28,49 @@ class Poller:
         self._known_messages: set[str] = set()
         self._baseline = {"notifications": False, "inbox": False}
         self._ticks = 0
+        self.interval = max(60, int(settings.get("poll_minutes") or 2) * 60)  # the normal gap (Preferences)
+        self._delay = self.interval  # the gap until the next round (longer while backing off)
+        self._round_failed = False
 
     def start(self) -> None:
         if self._source is None:
-            self._source = GLib.timeout_add_seconds(POLL_SECONDS, self._tick)
+            self._delay = self.interval
             self._tick()
+            self._schedule()
+
+    def set_interval(self, seconds: int) -> None:
+        """A new normal gap; takes effect from the next round."""
+        self.interval = max(30, int(seconds))
+        if self._source is not None and self._delay < self.interval * 2:
+            GLib.source_remove(self._source)
+            self._delay = self.interval
+            self._schedule()
+
+    def _schedule(self) -> None:
+        self._source = GLib.timeout_add_seconds(self._delay, self._fire)
+
+    def _fire(self) -> bool:
+        self._source = None
+        self._tick()
+        self._schedule()
+        return GLib.SOURCE_REMOVE
+
+    def _round_result(self, result, error) -> None:
+        """Back off while X says slow down (or a saved copy had to stand in), recover after."""
+        throttled = (error is not None and error.kind in ("rate_limit", "network")) or (isinstance(result, dict) and result.get("stale"))
+        if throttled and not self._round_failed:
+            self._round_failed = True
+            self._delay = min(max(self._delay, self.interval) * 2, MAX_BACKOFF_SECONDS)
+            print(f"[perch] X is throttling or unreachable: next check in {self._delay // 60} min")
+            if self._source is not None:  # the next round is already scheduled: push it back
+                GLib.source_remove(self._source)
+                self._schedule()
+        elif not throttled and error is None and not self._round_failed and self._delay > self.interval:
+            # X answers again: bring the already scheduled (long) wait back to the normal gap.
+            self._delay = self.interval
+            if self._source is not None:
+                GLib.source_remove(self._source)
+                self._schedule()
 
     def stop(self) -> None:
         if self._source is not None:
@@ -32,8 +80,12 @@ class Poller:
         self._known_messages.clear()
         self._baseline = {"notifications": False, "inbox": False}
         self._ticks = 0
+        self._delay = self.interval
 
     def _tick(self) -> bool:
+        if self._ticks and not self._round_failed:
+            self._delay = self.interval  # the last round went through: back to the normal gap
+        self._round_failed = False
         sidecar = self._window.sidecar
         sidecar.call("notifications", {"fresh": True}, self._on_notifications)
         sidecar.call("dm.inbox", {"meId": self._window.me_id, "fresh": True}, self._on_inbox)
@@ -46,6 +98,7 @@ class Poller:
         return GLib.SOURCE_CONTINUE
 
     def _on_timeline(self, result, error) -> None:
+        self._round_result(result, error)
         if error:
             print(f"[perch] timeline poll failed: {error}")
             return
@@ -54,6 +107,7 @@ class Poller:
     # -- notifications ------------------------------------------------------
 
     def _on_notifications(self, result, error) -> None:
+        self._round_result(result, error)
         if error:
             print(f"[perch] notification poll failed: {error}")
             return
@@ -70,6 +124,8 @@ class Poller:
             return
         # Only alert for things that are actually unread (not just newly paged in).
         fresh = [i for i in fresh if not seen_at or (i.get("receivedAt") or "") > seen_at]
+        # ... and only for the kinds chosen in Preferences.
+        fresh = [i for i in fresh if settings.get(alert_setting(i.get("icon")))]
         if len(fresh) > MAX_INDIVIDUAL:
             self._send("notifications", "X", f"{len(fresh)} new notifications", "notifications")
         else:
@@ -79,6 +135,7 @@ class Poller:
     # -- DMs ----------------------------------------------------------------
 
     def _on_inbox(self, result, error) -> None:
+        self._round_result(result, error)
         if error:
             print(f"[perch] inbox poll failed: {error}")
             return
@@ -99,6 +156,8 @@ class Poller:
                 incoming.append(conversation)
 
         self._window.on_inbox_polled(result, [c.get("id") for c in incoming])
+        if not settings.get("notify_messages"):
+            return
         if len(incoming) > MAX_INDIVIDUAL:
             self._send("dm", "Messages", f"{len(incoming)} new messages", "messages")
             return

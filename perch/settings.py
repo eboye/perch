@@ -8,6 +8,16 @@ from gi.repository import GLib
 _PATH = Path(GLib.get_user_config_dir()) / "perch" / "settings.json"
 _DEFAULTS = {
     "desktop_notifications": True,
+    # Which kinds get a desktop notification (Preferences).
+    "notify_messages": True,
+    "notify_likes": True,
+    "notify_reposts": True,
+    "notify_follows": True,
+    "notify_other": True,
+    "poll_minutes": 2,
+    "dock_badge": True,
+    "start_tab": "last",  # or a tab name: following, foryou, notifications, messages
+    "image_cache_mb": 300,
     "notifications_seen_at": "",  # ISO time of the newest notification the user has looked at
 }
 

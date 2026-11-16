@@ -7,8 +7,20 @@
   border-bottom: 1px solid alpha(currentColor, 0.08);
 }
 
+/* Post text: about 1.45x the font size between lines, which reads more easily than the font's
+   default (~1.2x). GTK's line-height scales the font's own line spacing, hence 1.2 here. */
 .tweet-text {
   font-size: 1.04em;
+  line-height: 1.2;
+}
+
+/* Other running text, a little tighter (~1.4x): DM bubbles, notification excerpts, profile bios,
+   translations. */
+.bubble,
+.notification-post,
+.profile-bio,
+.translation label {
+  line-height: 1.16;
 }
 
 .tweet-stats {
@@ -135,6 +147,12 @@
 /* Links in your own (accent-coloured) bubbles: the bubble's text colour, underlined. */
 .bubble.mine link {
   color: var(--accent-fg-color);
+}
+
+/* Notifications: an excerpt of the post a like / repost / reply is about. */
+.notification-post {
+  border-left: 3px solid alpha(currentColor, 0.15);
+  padding-left: 8px;
 }
 
 /* DMs: the message a reply answers, quoted above it. */

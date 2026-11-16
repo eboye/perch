@@ -20,6 +20,7 @@ _ICONS = {
     "bird_icon": ("dialog-information-symbolic", "accent"),
 }
 _DEFAULT_ICON = ("preferences-system-notifications-symbolic", "accent")
+MAX_AVATARS = 8  # people shown on one row
 
 
 def icon_for(kind: str | None) -> str:
@@ -51,6 +52,9 @@ class NotificationRow(Gtk.ListBoxRow):
     def __init__(self, item: dict, users: dict, unread: bool, controller=None):
         self.post_id = post_id_for(item)
         self.url = web_url_for(item)
+        self.icon = item.get("icon")
+        # The people it's about (first one opens when there's no post or usable link).
+        self.people = [users[uid] for uid in item.get("from") or [] if uid in users]
         super().__init__(activatable=bool(self.post_id or self.url))
         self.add_css_class("tweet")
         icon_name, css = _ICONS.get(item.get("icon") or "", _DEFAULT_ICON)
@@ -65,7 +69,7 @@ class NotificationRow(Gtk.ListBoxRow):
         row.append(icon)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
-        people = [users[uid] for uid in item.get("from") or [] if uid in users][:6]
+        people = [users[uid] for uid in item.get("from") or [] if uid in users][:MAX_AVATARS]
         if people:
             avatars = Gtk.Box(spacing=4)
             for person in people:
@@ -77,6 +81,12 @@ class NotificationRow(Gtk.ListBoxRow):
 
         message = Gtk.Label(label=item.get("message") or "", xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR)
         content.append(message)
+        # Which post it's about (as X shows it): a short excerpt.
+        if post_text := (item.get("postText") or "").strip():
+            excerpt = Gtk.Label(label=post_text.replace("\n", " "), xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, lines=2, ellipsize=Pango.EllipsizeMode.END)
+            excerpt.add_css_class("dim-label")
+            excerpt.add_css_class("notification-post")
+            content.append(excerpt)
         when = Gtk.Label(label=fmt.relative_time(item.get("receivedAt")), xalign=0, css_classes=["dim-label", "caption"])
         when.set_tooltip_text(fmt.full_time(item.get("receivedAt")))
         content.append(when)
@@ -89,13 +99,67 @@ class NotificationRow(Gtk.ListBoxRow):
         self.set_child(row)
 
 
+# Likes and reposts of the same post that X sent as separate entries become one row.
+_GROUPED = {"heart_icon": "liked", "retweet_icon": "reposted"}
+_OTHERS = re.compile(r"\band (\d+) others?\b")
+
+
+def _people_count(item: dict) -> int:
+    """How many people an entry is about: X lists a few and says "and N others" for the rest."""
+    shown = len(item.get("from") or [])
+    match = _OTHERS.search(item.get("message") or "")
+    return max(shown, 1 + int(match.group(1))) if match else max(shown, 1)
+
+
+def group_notifications(items: list[dict], users: dict) -> list[dict]:
+    """Merge likes (and reposts) of the same post into one entry, newest first, with everyone in it."""
+    merged: list[dict] = []
+    by_key: dict[tuple, dict] = {}
+    for item in items:
+        verb = _GROUPED.get(item.get("icon") or "")
+        post = post_id_for(item)
+        key = (item.get("icon"), post)
+        if not verb or not post:
+            merged.append(item)
+            continue
+        if key not in by_key:
+            group = {**item, "from": list(item.get("from") or []), "parts": [item]}
+            by_key[key] = group
+            merged.append(group)
+            continue
+        group = by_key[key]
+        group["parts"].append(item)
+        group["from"] += [uid for uid in item.get("from") or [] if uid not in group["from"]]
+        group["receivedAt"] = max(group.get("receivedAt") or "", item.get("receivedAt") or "")
+        group["postText"] = group.get("postText") or item.get("postText")
+    for group in by_key.values():
+        parts = group.pop("parts")
+        if len(parts) > 1:
+            total = sum(_people_count(part) for part in parts)
+            names = [(users.get(uid) or {}).get("fullName") or "Someone" for uid in group["from"][:2]]
+            verb = _GROUPED[group["icon"]]
+            others = total - len(names)
+            if others <= 0:
+                who = " and ".join(names)
+            else:
+                who = f"{', '.join(names)} and {others} other{'s' if others != 1 else ''}"
+            group["message"] = f"{who} {verb} your post"
+    return merged
+
+
+# Filters over the All list (no extra requests): which notification icons each one keeps.
+_FILTERS = {"likes": {"heart_icon"}, "reposts": {"retweet_icon"}, "follows": {"person_icon"}}
+_EMPTY = {"all": "No notifications yet", "mentions": "No mentions yet", "likes": "No likes yet", "reposts": "No reposts yet", "follows": "No new followers yet"}
+
+
 class NotificationsView(PagedListView):
-    """All notifications, or (``mode='mentions'``) the posts that mention you."""
+    """All notifications (or just likes / reposts / follows among them), or (``mode='mentions'``)
+    the posts that mention you."""
 
     error_title = "Couldn't load notifications"
     empty_title = "No notifications yet"
     empty_icon = "preferences-system-notifications-symbolic"
-    # The All / Mentions switch sits above the rows, so the list stays on screen even when empty.
+    # The filter switch sits above the rows, so the list stays on screen even when empty.
     always_show_list = True
     hide_muted_words = True  # applies to the Mentions posts (notification rows have no post text)
 
@@ -106,19 +170,35 @@ class NotificationsView(PagedListView):
         self.newest_at = ""
         switch = Adw.ToggleGroup(halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=4)
         switch.add_css_class("round")
-        switch.add(Adw.Toggle(name="all", label="All"))
-        switch.add(Adw.Toggle(name="mentions", label="Mentions"))
+        for name, label in (("all", "All"), ("mentions", "Mentions"), ("likes", "Likes"), ("reposts", "Reposts"), ("follows", "Follows")):
+            switch.add(Adw.Toggle(name=name, label=label))
         switch.set_active_name("all")
         switch.connect("notify::active-name", lambda group, _p: self.set_mode(group.get_active_name()))
         self.set_header(switch)
+        self._list.set_filter_func(self._keep_row)
+        self._placeholder = Gtk.Label(label=self.empty_label, margin_top=24, margin_bottom=24, css_classes=["dim-label"])
+        self._list.set_placeholder(self._placeholder)
 
     @property
     def empty_label(self) -> str:  # noqa: D401 - read by PagedListView
-        return "No mentions yet" if self.mode == "mentions" else "No notifications yet"
+        return _EMPTY.get(self.mode, "No notifications yet")
+
+    def _source(self, mode: str) -> str:
+        return "mentions" if mode == "mentions" else "all"
+
+    def _keep_row(self, row: Gtk.ListBoxRow) -> bool:
+        kinds = _FILTERS.get(self.mode)
+        return kinds is None or getattr(row, "icon", None) in kinds
 
     def set_mode(self, mode: str) -> None:
-        if mode != self.mode:
-            self.mode = mode
+        if mode == self.mode:
+            return
+        same_data = self._source(mode) == self._source(self.mode)
+        self.mode = mode
+        self._placeholder.set_label(self.empty_label)
+        if same_data and self.loaded_once:
+            self._list.invalidate_filter()  # Likes / Reposts / Follows: the All list, filtered
+        else:
             self.reload()
 
     def fetch_page(self, cursor, callback) -> None:
@@ -127,7 +207,13 @@ class NotificationsView(PagedListView):
             return
         if cursor is None:  # fresh load: unread dots relative to what was last marked seen
             self._seen_at = settings.account_get("notifications_seen_at") or ""
-        self._controller.sidecar.call("notifications", {"cursor": cursor}, callback)
+
+        def grouped(result, error):
+            if result is not None:
+                result = {**result, "list": group_notifications(result.get("list") or [], result.get("users") or {})}
+            callback(result, error)
+
+        self._controller.sidecar.call("notifications", {"cursor": cursor}, grouped)
 
     def make_row(self, item: dict, page: dict) -> Gtk.ListBoxRow:
         if self.mode == "mentions":
@@ -136,7 +222,7 @@ class NotificationsView(PagedListView):
         return NotificationRow(item, page.get("users") or {}, unread=bool(self._seen_at) and received > self._seen_at, controller=self._controller)
 
     def on_page_loaded(self, page: dict, first: bool) -> None:
-        if self.mode == "all" and first and page.get("list"):
+        if self._source(self.mode) == "all" and first and page.get("list"):
             self.newest_at = max(item.get("receivedAt") or "" for item in page["list"])
             self._controller.on_notifications_loaded()
 
@@ -144,11 +230,16 @@ class NotificationsView(PagedListView):
         if isinstance(row, TweetRow):
             row.activate_post()
             return
-        # Likes, reposts, replies, mentions → the post page; follows → the profile page;
-        # anything else → the browser.
+        # Everything opens in Perch: likes, reposts, replies and mentions → the post; follows → the
+        # profile; Spaces → the Space; others ("new posts from …", which link only an internal X
+        # path) → the person they're about. The browser only for a link that isn't X at all.
         if row.post_id:
             self._controller.open_tweet_by_id(row.post_id, fallback_url=row.url)
-        elif row.url and not self._controller.open_link(row.url):
+        elif row.url and fmt.x_link_target(row.url):
+            self._controller.open_link(row.url)
+        elif row.people:
+            self._controller.open_profile(row.people[0])
+        elif row.url and not row.url.startswith("https://x.com/notifications"):
             Gtk.UriLauncher(uri=row.url).launch(self.get_root(), None, None, None)
 
     def mark_seen(self) -> None:

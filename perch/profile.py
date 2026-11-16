@@ -182,7 +182,7 @@ class ProfilePage(Adw.NavigationPage):
         info.append(handle_row)
 
         if user.get("description"):
-            bio = Gtk.Label(xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, use_markup=True, margin_top=4)
+            bio = Gtk.Label(xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, use_markup=True, margin_top=4, css_classes=["profile-bio"])
             bio.set_markup(fmt.tweet_markup(user["description"]))
             bio.connect("activate-link", lambda _l, uri: self._controller.open_link(uri))
             info.append(bio)
@@ -257,6 +257,7 @@ class ProfilePage(Adw.NavigationPage):
         button.add_css_class("circular")
         # On the button itself: its popover menu always finds the action there.
         button.insert_action_group("profile", actions)
+        button.releasable = [mute, block]  # their callbacks refer to this page (see lifecycle.py)
         return button
 
     # -- follow -----------------------------------------------------------------

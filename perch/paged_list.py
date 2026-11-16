@@ -5,6 +5,7 @@ Subclasses implement ``fetch_page``, ``make_row`` and optionally ``item_id`` / `
 
 from gi.repository import Adw, GLib, GObject, Graphene, Gtk
 
+from perch.lifecycle import release
 from perch.sidecar import RpcError
 
 
@@ -112,6 +113,7 @@ class PagedListView(Gtk.Stack):
         self._retry_first = False
         while row := self._list.get_row_at_index(0):
             self._list.remove(row)
+            release(row)  # free it (see lifecycle.py)
         self.set_visible_child_name("list" if self.always_show_list else "loading")
         self._fetch()
 

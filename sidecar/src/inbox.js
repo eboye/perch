@@ -18,12 +18,19 @@ dmlinks.install();
 
 // id -> plain user ({ id, fullName, userName, profileImage, isVerified }), shared by notifications and DMs.
 const userCache = new Map();
+const MAX_USERS = 3000; // Perch runs for days: keep the most recently used, drop the oldest
+
+function rememberUser(id, user) {
+	userCache.delete(id);
+	userCache.set(id, user);
+	while (userCache.size > MAX_USERS) userCache.delete(userCache.keys().next().value);
+}
 const MAX_LOOKUP = 50;
 
 function rememberLegacyUser(raw) {
 	const id = raw?.id_str;
 	if (!id) return;
-	userCache.set(id, {
+	rememberUser(id, {
 		id,
 		fullName: raw.name,
 		userName: raw.screen_name,
@@ -39,7 +46,7 @@ async function lookupUsers(client, ids) {
 		try {
 			for (const user of await client.user.details(missing)) {
 				const plainUser = JSON.parse(JSON.stringify(user));
-				userCache.set(plainUser.id, plainUser);
+				rememberUser(plainUser.id, plainUser);
 			}
 		} catch (err) {
 			// Names/avatars are cosmetic: fall back to ids rather than failing the whole page.
@@ -69,6 +76,31 @@ function serializeMessage(message) {
 }
 
 const byTime = (a, b) => new Date(a.createdAt) - new Date(b.createdAt);
+
+// rest_id -> text of every post in a GraphQL response (t.co links swapped for their real URLs).
+function postTexts(root) {
+	const texts = new Map();
+	const stack = [root];
+	let visited = 0;
+	while (stack.length && visited++ < 200000) {
+		const node = stack.pop();
+		if (!node || typeof node !== 'object') continue;
+		if (typeof node.rest_id === 'string' && typeof node.legacy?.full_text === 'string' && !texts.has(node.rest_id)) {
+			let text = node.note_tweet?.note_tweet_results?.result?.text || node.legacy.full_text;
+			for (const link of node.legacy.entities?.urls || []) {
+				if (link.url && link.expanded_url) text = text.split(link.url).join(link.expanded_url);
+			}
+			for (const media of node.legacy.entities?.media || []) {
+				if (media.url) text = text.split(media.url).join('');
+			}
+			texts.set(node.rest_id, text.trim());
+		}
+		for (const value of Array.isArray(node) ? node : Object.values(node)) {
+			if (value && typeof value === 'object') stack.push(value);
+		}
+	}
+	return texts;
+}
 
 // Reactions ([{ emoji, senderId }]) and reply targets of a conversation's recent messages, from the
 // REST history. Best effort: an empty map if X refuses. -> Map(messageId -> { reactions, replyTo })
@@ -176,6 +208,8 @@ function methods({ requireClient, demoMode }) {
 			const resource = ResourceType.USER_NOTIFICATIONS;
 			const response = await client.user.request(resource, { count: 40, cursor: cursor || undefined });
 			const data = Extractors[resource](response.data);
+			// The posts the notifications are about come along in the response: their text, for an excerpt.
+			const texts = postTexts(response.data);
 			const list = data.list.map((n) => ({
 				id: n.id,
 				message: n.message,
@@ -184,6 +218,7 @@ function methods({ requireClient, demoMode }) {
 				target: n.target,
 				icon: n.raw?.notification_icon || null,
 				url: n.raw?.notification_url?.url || null,
+				postText: n.target.map((t) => texts.get(String(t))).find(Boolean) || null,
 			}));
 			const users = await lookupUsers(client, list.flatMap((n) => n.from.slice(0, 5)));
 			return { list, next: data.next || '', users };

@@ -194,3 +194,24 @@ test('sign-in clears the cache; live Spaces are never cached', async () => {
 	await cache.run('space.details', { id: 's' }, fetcher({ id: 's' }));
 	assert.equal(calls.length, 5);
 });
+
+test('stats count the saved results and their age; clear empties them', async () => {
+	const { cache, calls, fetcher, advance } = setup();
+	await cache.run('me', {}, fetcher({ id: '1' }));
+	advance(40);
+	await cache.run('timeline', { kind: 'following' }, fetcher(page()));
+	assert.deepEqual(cache.stats(), { entries: 2, oldestSeconds: 40 });
+	cache.clear();
+	assert.deepEqual(cache.stats(), { entries: 0, oldestSeconds: 0 });
+	await cache.run('me', {}, fetcher({ id: '1' }));
+	assert.equal(calls.length, 3); // asked X again after clearing
+});
+
+test('cache.stats and cache.clear never go through the cache themselves', async () => {
+	const { cache, calls, fetcher } = setup();
+	await cache.run('me', {}, fetcher({ id: '1' }));
+	await cache.run('cache.stats', {}, fetcher({ entries: 1 }));
+	await cache.run('cache.stats', {}, fetcher({ entries: 1 }));
+	assert.equal(calls.length, 3); // stats ran both times, and didn't drop the saved 'me'
+	assert.equal(cache.stats().entries, 1);
+});

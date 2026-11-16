@@ -40,6 +40,14 @@ const plain = (value) => (value === undefined ? null : JSON.parse(JSON.stringify
 const methods = {
 	ping: async () => ({ pong: true, demo: demoMode }),
 
+	// The saved copies of X's answers (see cache.js): how many, and empty them (Preferences).
+	'cache.stats': async () => cache.stats(),
+	'cache.clear': async () => {
+		const { entries } = cache.stats();
+		cache.clear();
+		return { cleared: entries };
+	},
+
 	init: async ({ apiKey }) => {
 		if (demoMode) return demo.signIn(apiKey);
 		if (!apiKey) throw Object.assign(new Error('API key is empty'), { kind: 'auth' });

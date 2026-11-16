@@ -18,6 +18,9 @@ def _attr(value: str) -> str:
 def tweet_markup(text: str, strip_trailing_link: bool = False) -> str:
     """Pango markup for a tweet body with links for URLs, @mentions and #hashtags."""
     text = html.unescape(text or "")
+    # Tidy the layout: no spaces at line ends, and at most one blank line between paragraphs.
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     if strip_trailing_link:
         text = _TRAILING_TCO.sub("", text)
     out, pos = [], 0
@@ -136,6 +139,7 @@ def avatar_url(url: str | None) -> str | None:
 
 _X_HOST = re.compile(r"^https?://(?:www\.|mobile\.)?(?:x|twitter)\.com(/[^?#]*)?", re.I)
 _PROFILE_PATH = re.compile(r"^/([A-Za-z0-9_]{1,15})/?$")
+_SPACE_PATH = re.compile(r"^/i/spaces/([A-Za-z0-9]+)")
 _POST_PATH = re.compile(r"^/(?:[A-Za-z0-9_]{1,15}|i(?:/web)?)/status(?:es)?/(\d+)")
 # First path segments that are X pages, not usernames.
 _RESERVED = {
@@ -145,14 +149,16 @@ _RESERVED = {
 
 
 def x_link_target(uri: str) -> tuple[str, str] | None:
-    """Where an X link points, if Perch can show it: ("profile", handle), ("post", id) or
-    ("search", query) for hashtag and search links."""
+    """Where an X link points, if Perch can show it: ("profile", handle), ("post", id),
+    ("space", id) or ("search", query) for hashtag and search links."""
     match = _X_HOST.match(uri or "")
     if not match:
         return None
     path = match.group(1) or "/"
     if post := _POST_PATH.match(path):
         return "post", post.group(1)
+    if space := _SPACE_PATH.match(path):
+        return "space", space.group(1)
     if hashtag := re.match(r"^/hashtag/([^/]+)/?$", path):
         return "search", "#" + unquote(hashtag.group(1))
     if path.rstrip("/") == "/search":

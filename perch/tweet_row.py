@@ -318,7 +318,6 @@ class ActionBar(Gtk.Box):
 
         self._repost = _CountButton("media-playlist-repeat-symbolic", "Repost or quote", "reposted")
         self._repost.connect("clicked", self._on_repost_clicked)
-        self._repost_popover = self._build_repost_popover()
 
         self._like = _CountButton("emote-love-symbolic", "Like", "liked")
         self._like.connect("clicked", lambda *_: self._toggle("liked", "likeCount", "like", "unlike"))
@@ -338,6 +337,8 @@ class ActionBar(Gtk.Box):
         self._refresh()
 
     def _build_repost_popover(self) -> Gtk.Popover:
+        """Repost / Quote, made when the button is clicked and detached again when it closes (a popover
+        left attached to the button kept rows from being freed)."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._repost_toggle = Gtk.Button(has_frame=False)
         self._repost_toggle.connect("clicked", lambda *_: self._run_repost_toggle())
@@ -348,9 +349,11 @@ class ActionBar(Gtk.Box):
         popover = Gtk.Popover(child=box, has_arrow=True)
         popover.add_css_class("menu")
         popover.set_parent(self._repost)
+        popover.connect("closed", lambda p: GLib.idle_add(lambda: p.unparent() or GLib.SOURCE_REMOVE))
         return popover
 
     def _on_repost_clicked(self, _button) -> None:
+        self._repost_popover = self._build_repost_popover()
         self._repost_toggle.set_label("Undo Repost" if self._tweet.get("retweeted") else "Repost")
         self._repost_popover.popup()
 

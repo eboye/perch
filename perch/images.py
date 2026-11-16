@@ -78,6 +78,32 @@ def _trim_disk() -> None:
             break
 
 
+def set_disk_limit(megabytes: int) -> None:
+    """The most the disk cache may hold (Preferences); trims now if it's over."""
+    global _DISK_LIMIT, _DISK_TARGET
+    _DISK_LIMIT = max(50, int(megabytes)) * 1024 * 1024
+    _DISK_TARGET = int(_DISK_LIMIT * 0.83)
+    _pool.submit(_trim_disk)
+
+
+def disk_usage() -> int:
+    """Bytes the disk cache holds now."""
+    try:
+        return sum(entry.stat().st_size for entry in _disk_dir.iterdir() if entry.is_file())
+    except OSError:
+        return 0
+
+
+def clear_disk() -> None:
+    """Empty the disk cache (images already on screen stay; they download again when needed)."""
+    try:
+        for entry in _disk_dir.iterdir():
+            if entry.is_file():
+                entry.unlink(missing_ok=True)
+    except OSError as err:
+        print(f"[perch] clearing the image cache failed: {err}")
+
+
 def _schedule_trim() -> None:
     global _trimmed
     if not _trimmed:

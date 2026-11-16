@@ -8,7 +8,7 @@ from pathlib import Path  # noqa: E402
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gst, Gtk  # noqa: E402
 
-from perch import APP_ID, APP_NAME, VERSION  # noqa: E402
+from perch import APP_ID, APP_NAME, VERSION, images, settings  # noqa: E402
 from perch.sidecar import Sidecar  # noqa: E402
 from perch.updates import UpdateMonitor  # noqa: E402
 from perch.window import PerchWindow  # noqa: E402
@@ -57,6 +57,7 @@ class PerchApplication(Adw.Application):
         Gtk.StyleContext.add_provider_for_display(display, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         Gtk.IconTheme.get_for_display(display).add_search_path(str(Path(__file__).with_name("icons")))
         self._watch_user_css(display)
+        images.set_disk_limit(settings.get("image_cache_mb") or 300)
 
         # Stay alive however the window is closed; released again in _quit().
         self.hold()
