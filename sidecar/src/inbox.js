@@ -70,6 +70,31 @@ function serializeMessage(message) {
 
 const byTime = (a, b) => new Date(a.createdAt) - new Date(b.createdAt);
 
+// Reactions ([{ emoji, senderId }]) and reply targets of a conversation's recent messages, from the
+// REST history. Best effort: an empty map if X refuses. -> Map(messageId -> { reactions, replyTo })
+async function restDetails(client, conversationId) {
+	const details = new Map();
+	try {
+		const url = new URL(`https://x.com/i/api/1.1/dm/conversation/${encodeURIComponent(conversationId)}.json`);
+		url.search = new URLSearchParams({ count: '100', include_groups: 'true', supports_reactions: 'true', supports_edit: 'true', dm_users: 'false' });
+		const res = await signedFetch(client, url);
+		if (!res.ok) return details;
+		const body = await res.json();
+		for (const entry of body.conversation_timeline?.entries || []) {
+			const message = entry.message;
+			if (!message?.id) continue;
+			const reply = message.message_data?.reply_data;
+			details.set(String(message.id), {
+				reactions: (message.message_reactions || []).map((r) => ({ emoji: r.emoji_reaction || r.reaction_key, senderId: String(r.sender_id) })).filter((r) => r.emoji),
+				replyTo: reply?.id ? { id: String(reply.id), text: reply.text || '' } : null,
+			});
+		}
+	} catch (err) {
+		console.error('[sidecar] reactions unavailable:', err?.message || err);
+	}
+	return details;
+}
+
 // DM images: X's limits for a photo in a message.
 const DM_IMAGE_TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 const DM_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
@@ -259,7 +284,14 @@ function methods({ requireClient, demoMode }) {
 			const conversation = await client.dm.conversation(String(id));
 			if (!conversation) throw Object.assign(new Error('Conversation not found'), { kind: 'not_found' });
 			const messages = conversation.messages.map(serializeMessage).sort(byTime);
-			const users = await lookupUsers(client, conversation.participants);
+			// Reactions come from the REST history (X's newer event log records adding a reaction but
+			// not removing it); replies from the event log, else the REST history.
+			const [users, rest] = await Promise.all([lookupUsers(client, conversation.participants), restDetails(client, String(id))]);
+			for (const message of messages) {
+				const extra = rest.get(String(message.id));
+				message.replyTo = dmlinks.replyFor(message.id) || extra?.replyTo || null;
+				message.reactions = extra?.reactions || [];
+			}
 			// Older pages are not exposed: X's GetConversationPage cursor is a local sequence id hidden
 			// inside encoded XChat events, so paging by message id returns nothing. The first page
 			// (~150 recent messages) is what the UI shows.
@@ -271,6 +303,20 @@ function methods({ requireClient, demoMode }) {
 				participants: conversation.participants,
 				users,
 			};
+		},
+
+		// React to a message with an emoji, or take the reaction back. { conversationId, messageId, emoji, remove } -> { ok }
+		'dm.react': async ({ conversationId, messageId, emoji, remove }) => {
+			if (!conversationId || !messageId || !emoji) throw new Error('Missing conversation, message or emoji');
+			if (demoMode) return demo.react(String(messageId), String(emoji), Boolean(remove));
+			const url = `https://x.com/i/api/1.1/dm/reaction/${remove ? 'delete' : 'new'}.json`;
+			const res = await signedFetch(requireClient(), url, {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({ reaction_key: 'emoji', emoji_reaction: String(emoji), conversation_id: String(conversationId), dm_id: String(messageId) }).toString(),
+			});
+			if (!res.ok) throw Object.assign(new Error(`X did not ${remove ? 'remove' : 'add'} the reaction (HTTP ${res.status})`), { status: res.status });
+			return { ok: true };
 		},
 
 		// A photo attached to a DM. X serves these only to signed-in members of the conversation, so
@@ -337,8 +383,8 @@ function methods({ requireClient, demoMode }) {
 			return { ok: true };
 		},
 
-		// { conversationId, text, mediaPath? } -> { id, createdAt }. One image per message (X's limit).
-		'dm.send': async ({ conversationId, text, mediaPath }) => {
+		// { conversationId, text, mediaPath?, replyTo? (message id) } -> { id, createdAt }. One image per message (X's limit).
+		'dm.send': async ({ conversationId, text, mediaPath, replyTo }) => {
 			if (!conversationId) throw new Error('Missing conversation id');
 			if (!text?.trim() && !mediaPath) throw new Error('Message is empty');
 			if (mediaPath) checkDmImage(mediaPath);
@@ -365,6 +411,7 @@ function methods({ requireClient, demoMode }) {
 					request_id: randomUUID(),
 					text: text || '',
 					...(mediaId ? { media_id: mediaId } : {}),
+					...(replyTo ? { reply_to_dm_id: String(replyTo) } : {}),
 					cards_platform: 'Web-12',
 					include_cards: 1,
 					include_quote_count: true,

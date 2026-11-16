@@ -137,6 +137,33 @@
   color: var(--accent-fg-color);
 }
 
+/* DMs: the message a reply answers, quoted above it. */
+.bubble-reply {
+  border-left: 3px solid alpha(currentColor, 0.25);
+  padding: 2px 8px;
+  opacity: 0.75;
+}
+
+/* DM reactions: small chips under a message; yours are tinted. */
+button.reaction {
+  min-height: 0;
+  min-width: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: alpha(currentColor, 0.08);
+}
+
+button.reaction.mine,
+button.reaction-pick.mine {
+  background: alpha(var(--accent-bg-color), 0.25);
+}
+
+button.reaction-pick {
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 1.15em;
+}
+
 /* A post's translation (⋯ → Translate Post), set apart from the original. */
 .translation {
   border-left: 3px solid alpha(currentColor, 0.15);

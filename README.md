@@ -4,7 +4,7 @@ A small GTK 4 / libadwaita client for X — timelines, post pages with reply thr
 location, website, photo, header), your likes, highlights, removing followers, muting and blocking people (with
 muted / blocked account lists), who to follow, who reposted a post (and who liked
 your own — X keeps likes private otherwise), search (posts and people), bookmarks, lists, like / repost / quote / bookmark, posting
-and replying with images (with alt text), threads, drafts, translating posts, scheduling posts (and cancelling them), deleting your own posts, swipeable galleries for multi-media posts, an in-app viewer for photos (with zoom), videos and GIFs, notifications (all, or just mentions), a "new posts" pill on Following, closing to the dock (the window minimizes; Perch keeps running), following the system's light / dark switch live (including theme tools such as Rewaita that rewrite `~/.config/gtk-4.0/gtk.css`), direct messages (with an unread filter, photos, earlier
+and replying with images (with alt text), threads, drafts, translating posts, scheduling posts (and cancelling them), deleting your own posts, swipeable galleries for multi-media posts, an in-app viewer for photos (with zoom), videos and GIFs, notifications (all, or just mentions), a "new posts" pill on Following, closing to the dock (the window minimizes; Perch keeps running), following the system's light / dark switch live (including theme tools such as Rewaita that rewrite `~/.config/gtk-4.0/gtk.css`), several accounts (switch from the main menu), lists pinned as tabs, muted words, direct messages (with replies, reactions, GIFs, an unread filter, photos, earlier
 history and deleting conversations), keyboard navigation (j / k / l / r, Ctrl+? for the list), desktop notifications (polled every
 2 minutes while the app is open), and listening to Spaces (live and replays) — built on
 [rettiwt-api](https://github.com/Rishikant181/Rettiwt-API) (the same unofficial library
@@ -41,7 +41,10 @@ runtime is pulled from Flathub if missing.
 
 Perch needs a rettiwt **API key** — a base64 bundle of your X session cookies. Generate one with the
 X Auth Helper extension (see the rettiwt README, "Authentication"), ideally from a private window you
-never log out of. It is stored with libsecret (Secret portal inside Flatpak).
+never log out of. It is stored with libsecret (Secret portal inside Flatpak), one entry per account
+(keyed by the X user id). Main menu → **Add Account…** signs in to another account; the menu then
+offers **Switch to @…**, and **Sign Out** forgets the current account only. Drafts, pinned lists and
+the notifications "seen" marker are kept per account.
 
 Treat the key like a password: it is full access to the account. Using it is against X's terms; the
 account can be rate limited or locked.
@@ -65,6 +68,7 @@ PERCH_DEMO=1 python3 -m perch            # offline fixtures, no account needed
 PERCH_API_KEY=... python3 -m perch       # skip the keyring
 PERCH_AUDIO_SINK="fakesink sync=true"    # play Spaces silently while testing
 PERCH_DEBUG_RPC=1                        # log sidecar calls (method + ids only) to stderr
+PERCH_KEYRING=memory                     # keep keys in memory only (with PERCH_DEMO=1: keys demo-1, demo-2 for account tests)
 ```
 
 Flathub note: the sidecar module uses network during the build (`npm ci`). Publishing to Flathub would

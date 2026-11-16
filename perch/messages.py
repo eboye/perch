@@ -4,14 +4,19 @@ import base64
 import re
 from pathlib import Path
 
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Pango
 
 from perch import format as fmt
 from perch import images
+from perch.focal_picture import FocalPicture
 from perch.paged_list import PagedListView
 
 # A photo attached to a DM (X serves it only with the session; see the sidecar's dm.media).
 DM_PHOTO_URL = re.compile(r"^https://ton\.(?:x|twitter)\.com/(?:i/ton|1\.1/ton)/data/dm/")
+# A GIF or video attached to a DM (X serves the MP4 without the session).
+DM_VIDEO_URL = re.compile(r"^https://video\.twimg\.com/dm_(?:gif|video)/")
+# The quick reactions offered on a message (X's own set).
+QUICK_REACTIONS = ("😂", "😲", "😢", "❤️", "🔥", "👍", "👎")
 # Image types X accepts in a message.
 DM_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp")
 ENCRYPTED_TEXT = "Encrypted message — open X to read it"
@@ -199,59 +204,180 @@ def _show_photo_dialog(parent: Gtk.Widget, texture: Gdk.Paintable | None) -> Non
 
 
 class _Bubble(Gtk.ListBoxRow):
-    def __init__(self, message: dict, mine: bool, sender: dict | None, show_sender: bool, on_link=None, load_photo=None):
-        """``load_photo(url, callback)`` loads a DM photo (they need the X session)."""
+    """One message. ``actions`` (the conversation page) provides: ``me_id``, ``open_link(uri)``,
+    ``load_photo(url, callback)``, ``open_video(url, kind)``, ``reply_to(message)`` and
+    ``react(bubble, emoji, remove)``. Without it (tests, previews) the bubble is display-only."""
+
+    def __init__(self, message: dict, mine: bool, sender: dict | None, show_sender: bool, actions=None):
         super().__init__(activatable=False, selectable=False)
         self.add_css_class("bubble-row")
+        self.message = message
+        self._mine = mine
+        self._actions = actions
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, halign=Gtk.Align.END if mine else Gtk.Align.START)
+        self._column = column
         if show_sender and sender:
             column.append(Gtk.Label(label=sender.get("fullName") or "", xalign=0, css_classes=["caption", "dim-label"]))
 
+        # The message this one replies to, quoted above it.
+        if reply := message.get("replyTo"):
+            quote = Gtk.Label(label=f"↩ {(reply.get('text') or 'a message').strip()}", xalign=0, ellipsize=Pango.EllipsizeMode.END, max_width_chars=40)
+            quote.add_css_class("bubble-reply")
+            quote.add_css_class("caption")
+            quote.set_halign(Gtk.Align.END if mine else Gtk.Align.START)
+            quote.set_tooltip_text(reply.get("text") or "")
+            column.append(quote)
+
         # Photos: one you just sent from Perch (a local file), or ones X has (loaded with the session).
-        photos = 0
+        media = 0
         if local_image := message.get("localImage"):
             try:
                 column.append(self._photo(mine, Gdk.Texture.new_from_filename(local_image)))
-                photos += 1
+                media += 1
             except GLib.Error:
                 pass
-        elif load_photo:
+        elif actions is not None:
             for url in [u for u in message.get("mediaUrls") or [] if DM_PHOTO_URL.match(u)][:4]:
                 picture = self._photo(mine, None)
-                load_photo(url, lambda texture, p=picture: self._show_photo(p, texture))
+                actions.load_photo(url, lambda texture, p=picture: self._show_photo(p, texture))
                 column.append(picture)
-                photos += 1
-        if photos and not message.get("text"):
-            self._finish(column, message, mine)
-            return
+                media += 1
+            # GIFs and videos: X serves the MP4 itself without the session; play it in the viewer.
+            for url in [u for u in message.get("mediaUrls") or [] if DM_VIDEO_URL.match(u)][:2]:
+                kind = "GIF" if "/dm_gif/" in url else "VIDEO"
+                play = Gtk.Button(label=f"▶ {'GIF' if kind == 'GIF' else 'Video'}", halign=Gtk.Align.END if mine else Gtk.Align.START, tooltip_text="Play")
+                play.add_css_class("pill")
+                play.add_css_class("bubble-video")
+                play.connect("clicked", lambda *_, u=url, k=kind: actions.open_video(u, k))
+                column.append(play)
+                media += 1
 
         text = message.get("text") or ""
-        encrypted = message.get("isEncrypted") and not text
-        # Something X sent that Perch can't show (no text, media or encryption flag): say so rather
-        # than drawing an empty bubble.
-        unknown = not encrypted and not text and not message.get("mediaUrls")
-        body = Gtk.Label(xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, selectable=not (encrypted or unknown), max_width_chars=48)
-        if encrypted:
-            body.set_label(ENCRYPTED_TEXT)
-        elif unknown:
-            body.set_label(UNKNOWN_TEXT)
-        elif text:
-            body.set_markup(fmt.tweet_markup(text))  # links, @mentions and #tags are clickable
-            if on_link:
-                body.connect("activate-link", lambda _label, uri: on_link(uri))
-        else:
-            body.set_label("📎 Attachment")
-        body.add_css_class("bubble")
-        body.add_css_class("mine" if mine else "theirs")
-        if encrypted or unknown:
-            body.add_css_class("encrypted")
-        column.append(body)
-        self._finish(column, message, mine)
+        if text or not media:
+            encrypted = message.get("isEncrypted") and not text
+            # Something X sent that Perch can't show (no text, media or encryption flag): say so rather
+            # than drawing an empty bubble.
+            unknown = not encrypted and not text and not message.get("mediaUrls")
+            body = Gtk.Label(xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, selectable=not (encrypted or unknown), max_width_chars=48)
+            if encrypted:
+                body.set_label(ENCRYPTED_TEXT)
+            elif unknown:
+                body.set_label(UNKNOWN_TEXT)
+            elif text:
+                body.set_markup(fmt.tweet_markup(text))  # links, @mentions and #tags are clickable
+                if actions is not None:
+                    body.connect("activate-link", lambda _label, uri: actions.open_link(uri))
+            else:
+                body.set_label("📎 Attachment")
+            body.add_css_class("bubble")
+            body.add_css_class("mine" if mine else "theirs")
+            if encrypted or unknown:
+                body.add_css_class("encrypted")
+            column.append(body)
+
+        self._reactions = Gtk.Box(spacing=4, halign=Gtk.Align.END if mine else Gtk.Align.START, visible=False)
+        column.append(self._reactions)
+        self.render_reactions()
+
+        self._meta = Gtk.Label(xalign=1 if mine else 0, css_classes=["caption", "dim-label"])
+        self._meta.set_tooltip_text(fmt.full_time(message.get("createdAt")))
+        column.append(self._meta)
+        self.set_status(fmt.relative_time(message.get("createdAt")))
+        self.set_child(column)
+
+        self._menu_enabled = False
+        self.enable_menu()
+
+    def enable_menu(self) -> None:
+        """Right-click or long-press: react, reply, copy. Only for messages X knows (not one still
+        sending, or an encrypted one Perch can't read)."""
+        if self._menu_enabled or self._actions is None or not self.can_interact():
+            return
+        self._menu_enabled = True
+        # Capture phase: the message text is selectable, and a selectable label would otherwise
+        # take the right-click for its own Copy / Select All menu.
+        click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY, propagation_phase=Gtk.PropagationPhase.CAPTURE)
+
+        def on_right_click(gesture, _n, x, y):
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.open_menu(x, y)
+
+        click.connect("pressed", on_right_click)
+        self.add_controller(click)
+        hold = Gtk.GestureLongPress(propagation_phase=Gtk.PropagationPhase.CAPTURE)
+        hold.connect("pressed", lambda _g, x, y: self.open_menu(x, y))
+        self.add_controller(hold)
+        self.render_reactions()
+
+    def can_interact(self) -> bool:
+        message = self.message
+        return bool(message.get("id")) and not str(message["id"]).startswith("local-") and not (message.get("isEncrypted") and not message.get("text"))
+
+    # -- reactions ----------------------------------------------------------
+
+    def render_reactions(self) -> None:
+        while child := self._reactions.get_first_child():
+            self._reactions.remove(child)
+        me_id = getattr(self._actions, "me_id", None)
+        counts: dict[str, list[str]] = {}
+        for reaction in self.message.get("reactions") or []:
+            counts.setdefault(reaction["emoji"], []).append(reaction.get("senderId"))
+        for emoji, senders in counts.items():
+            mine = me_id in senders
+            chip = Gtk.Button(label=f"{emoji} {len(senders)}" if len(senders) > 1 else emoji)
+            chip.add_css_class("reaction")
+            if mine:
+                chip.add_css_class("mine")
+            chip.set_tooltip_text("Remove your reaction" if mine else f"React {emoji} too")
+            chip.set_sensitive(self._actions is not None and self.can_interact())
+            chip.connect("clicked", lambda *_, e=emoji, m=mine: self._actions.react(self, e, m))
+            self._reactions.append(chip)
+        self._reactions.set_visible(bool(counts))
+
+    def open_menu(self, x: float = 0, y: float = 0) -> None:
+        popover = Gtk.Popover(has_arrow=True)
+        popover.add_css_class("menu")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        emojis = Gtk.Box(spacing=2, margin_start=4, margin_end=4, margin_top=4, margin_bottom=4)
+        me_id = getattr(self._actions, "me_id", None)
+        mine = {r["emoji"] for r in self.message.get("reactions") or [] if r.get("senderId") == me_id}
+        for emoji in QUICK_REACTIONS:
+            button = Gtk.Button(label=emoji, tooltip_text="Remove reaction" if emoji in mine else f"React {emoji}")
+            button.add_css_class("flat")
+            button.add_css_class("reaction-pick")
+            if emoji in mine:
+                button.add_css_class("mine")
+            button.connect("clicked", lambda *_, e=emoji: (popover.popdown(), self._actions.react(self, e, e in mine)))
+            emojis.append(button)
+        box.append(emojis)
+        for label, callback in (
+            ("Reply", lambda: self._actions.reply_to(self.message)),
+            ("Copy Text", lambda: Gdk.Display.get_default().get_clipboard().set(self.message.get("text") or "")),
+        ):
+            if label == "Copy Text" and not self.message.get("text"):
+                continue
+            button = Gtk.Button(label=label, has_frame=False)
+            button.get_child().set_xalign(0)
+            button.connect("clicked", lambda *_, c=callback: (popover.popdown(), c()))
+            box.append(button)
+        popover.set_child(box)
+        popover.set_parent(self._column)
+        rect = Gdk.Rectangle()
+        ok, point = self.compute_point(self._column, Graphene.Point().init(x, y))
+        rect.x, rect.y, rect.width, rect.height = (int(point.x), int(point.y), 1, 1) if ok else (0, 0, 1, 1)
+        popover.set_pointing_to(rect)
+        popover.connect("closed", lambda p: GLib.idle_add(lambda: p.unparent() or False))
+        popover.popup()
+        self._menu = popover
+
+    # -- photos -------------------------------------------------------------
 
     @staticmethod
     def _photo(mine: bool, texture: Gdk.Texture | None) -> Gtk.Widget:
         """A photo in a bubble: click to see it larger."""
-        picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, width_request=220, height_request=165, can_shrink=True)
+        # FocalPicture fills a fixed 220×165: a Gtk.Picture asks for height in proportion to the row's
+        # whole width, which left a large gap under the photo.
+        picture = FocalPicture(width_request=220, height_request=165, overflow=Gtk.Overflow.HIDDEN)
         picture.add_css_class("media")
         picture.add_css_class("bubble-image")
         button = Gtk.Button(child=picture, halign=Gtk.Align.END if mine else Gtk.Align.START, tooltip_text="View Photo", sensitive=texture is not None)
@@ -270,13 +396,6 @@ class _Bubble(Gtk.ListBoxRow):
             return
         picture.set_paintable(texture)
         button.set_sensitive(True)
-
-    def _finish(self, column: Gtk.Box, message: dict, mine: bool) -> None:
-        self._meta = Gtk.Label(xalign=1 if mine else 0, css_classes=["caption", "dim-label"])
-        self._meta.set_tooltip_text(fmt.full_time(message.get("createdAt")))
-        column.append(self._meta)
-        self.set_status(fmt.relative_time(message.get("createdAt")))
-        self.set_child(column)
 
     def set_status(self, text: str, error: bool = False) -> None:
         self._meta.set_label(text)
@@ -359,7 +478,19 @@ class ConversationPage(Adw.NavigationPage):
         remove.add_css_class("circular")
         remove.connect("clicked", lambda *_: self._set_image(None))
         self._attachment.append(remove)
+        # "Replying to …" while answering a specific message (right-click a message → Reply).
+        self._reply_message: dict | None = None
+        self._reply_bar = Gtk.Box(spacing=8, margin_start=12, margin_end=12, margin_top=6, visible=False, css_classes=["schedule-info"])
+        self._reply_bar.append(Gtk.Image(icon_name="mail-reply-sender-symbolic"))
+        self._reply_label = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+        self._reply_bar.append(self._reply_label)
+        cancel_reply = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="Don't Reply", valign=Gtk.Align.CENTER)
+        cancel_reply.add_css_class("flat")
+        cancel_reply.add_css_class("circular")
+        cancel_reply.connect("clicked", lambda *_: self.reply_to(None))
+        self._reply_bar.append(cancel_reply)
         bottom = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        bottom.append(self._reply_bar)
         bottom.append(self._attachment)
         bottom.append(composer)
         self._send_button = Gtk.Button(icon_name="mail-send-symbolic", tooltip_text="Send", sensitive=False)
@@ -436,7 +567,7 @@ class ConversationPage(Adw.NavigationPage):
             sender_id = message.get("senderId")
             mine = sender_id == self._controller.me_id
             show_sender = self._is_group and not mine and sender_id != previous
-            self._list.insert(_Bubble(message, mine, self._users.get(sender_id), show_sender, on_link=self._controller.open_link, load_photo=self._load_photo), index)
+            self._list.insert(_Bubble(message, mine, self._users.get(sender_id), show_sender, actions=self), index)
             previous = sender_id
 
         def keep_place():
@@ -463,19 +594,51 @@ class ConversationPage(Adw.NavigationPage):
         self._message_ids.add(message["id"])
         sender_id = message.get("senderId")
         mine = sender_id == self._controller.me_id
-        bubble = _Bubble(
-            message,
-            mine,
-            self._users.get(sender_id),
-            show_sender=self._is_group and not mine and sender_id != self._last_sender,
-            on_link=self._controller.open_link,
-            load_photo=self._load_photo,
-        )
+        bubble = _Bubble(message, mine, self._users.get(sender_id), show_sender=self._is_group and not mine and sender_id != self._last_sender, actions=self)
         self._last_sender = sender_id
         self._list.append(bubble)
         return bubble
 
-    def _load_photo(self, url: str, callback) -> None:
+    # -- actions for the bubbles (see _Bubble) -------------------------------
+
+    @property
+    def me_id(self) -> str | None:
+        return self._controller.me_id
+
+    def open_link(self, uri: str) -> bool:
+        return self._controller.open_link(uri)
+
+    def open_video(self, url: str, kind: str) -> None:
+        self._controller.open_media([{"type": kind, "url": url}], 0, None)
+
+    def reply_to(self, message: dict | None) -> None:
+        """Answer a specific message: shown above the message box until sent or cancelled."""
+        self._reply_message = message
+        if message:
+            sender = self._users.get(message.get("senderId")) or {}
+            who = "yourself" if message.get("senderId") == self.me_id else sender.get("fullName") or "them"
+            self._reply_label.set_label(f"Replying to {who}: {(message.get('text') or 'a message').strip()}")
+        self._reply_bar.set_visible(message is not None)
+        self._entry.grab_focus()
+
+    def react(self, bubble: "_Bubble", emoji: str, remove: bool) -> None:
+        """Add or take back a reaction, shown at once and undone if X refuses."""
+        message = bubble.message
+        before = list(message.get("reactions") or [])
+        others = [r for r in before if not (r.get("senderId") == self.me_id and r.get("emoji") == emoji)]
+        message["reactions"] = others if remove else others + [{"emoji": emoji, "senderId": self.me_id}]
+        bubble.render_reactions()
+
+        def done(_result, error):
+            if error:
+                message["reactions"] = before
+                bubble.render_reactions()
+                self._controller.report_error(error, "Couldn't update the reaction")
+
+        params = {"conversationId": self.conversation_id, "messageId": message["id"], "emoji": emoji, "remove": remove}
+        self._controller.sidecar.call("dm.react", params, done)
+
+    def load_photo(self, url: str, callback) -> None:
         """A DM photo: from the image cache, else downloaded through the sidecar with the session."""
 
         def fetch(photo_url: str, done) -> None:
@@ -533,9 +696,12 @@ class ConversationPage(Adw.NavigationPage):
             return
         self._entry.set_text("")
         self._set_image(None)
+        replying = self._reply_message
+        self.reply_to(None)
         local_id = f"local-{GLib.get_monotonic_time()}"
         now = GLib.DateTime.new_now_utc().format_iso8601()
-        bubble = self._append({"id": local_id, "senderId": self._controller.me_id, "text": text, "createdAt": now, "localImage": image})
+        reply_info = {"id": replying["id"], "text": replying.get("text") or ""} if replying else None
+        bubble = self._append({"id": local_id, "senderId": self._controller.me_id, "text": text, "createdAt": now, "localImage": image, "replyTo": reply_info})
         bubble.set_status("Sending…")
         self._stack.set_visible_child_name("messages")
         self._scroll_to_bottom()
@@ -545,8 +711,12 @@ class ConversationPage(Adw.NavigationPage):
                 bubble.set_status(f"Not sent — {self._controller.describe_error(error, 'error')}", error=True)
                 return
             self._message_ids.add(result.get("id") or local_id)
+            if result.get("id"):
+                bubble.message["id"] = result["id"]  # X's id: the message can now be reacted / replied to
+                bubble.enable_menu()
             bubble.set_status(fmt.relative_time(result.get("createdAt")) or "now")
             sent = {"id": result.get("id"), "senderId": self._controller.me_id, "text": text or "📷 Photo", "createdAt": result.get("createdAt") or now}
             self._controller.on_dm_sent(self.conversation_id, sent)
 
-        self._controller.sidecar.call("dm.send", {"conversationId": self.conversation_id, "text": text, "mediaPath": image}, done)
+        params = {"conversationId": self.conversation_id, "text": text, "mediaPath": image, "replyTo": replying["id"] if replying else None}
+        self._controller.sidecar.call("dm.send", params, done)

@@ -175,7 +175,7 @@ class ComposeDialog(Adw.Dialog):
     # -- drafts -------------------------------------------------------------
 
     def _restore_draft(self) -> None:
-        draft = (settings.get("drafts") or {}).get(self._draft_key)
+        draft = (settings.account_get("drafts") or {}).get(self._draft_key)
         if not draft:
             return
         self._text.get_buffer().set_text(draft.get("text") or "")
@@ -199,17 +199,17 @@ class ComposeDialog(Adw.Dialog):
         if not text.strip() and not self._images and not thread:
             self._forget_draft()
             return
-        drafts = dict(settings.get("drafts") or {})
+        drafts = dict(settings.account_get("drafts") or {})
         drafts.pop(self._draft_key, None)
         drafts[self._draft_key] = {"text": text, "images": list(self._images), "alts": dict(self._alts), "thread": thread, "savedAt": GLib.DateTime.new_now_utc().format_iso8601()}
         while len(drafts) > MAX_DRAFTS:  # oldest first (insertion order)
             drafts.pop(next(iter(drafts)))
-        settings.set("drafts", drafts)
+        settings.account_set("drafts", drafts)
 
     def _forget_draft(self) -> None:
-        drafts = dict(settings.get("drafts") or {})
+        drafts = dict(settings.account_get("drafts") or {})
         if drafts.pop(self._draft_key, None) is not None:
-            settings.set("drafts", drafts)
+            settings.account_set("drafts", drafts)
 
     def _discard_draft(self) -> None:
         self._forget_draft()

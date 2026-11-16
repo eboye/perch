@@ -122,12 +122,29 @@ function sharedLinks(encodedEvent) {
 	if (!(message instanceof Map)) return null;
 	const urls = [];
 	for (const [fieldId, value] of message) {
-		if (fieldId !== 1) collectUrls(value, urls);
+		// 1 is the text, 4 the message being replied to (its text is quoted there).
+		if (fieldId !== 1 && fieldId !== MESSAGE_REPLY) collectUrls(value, urls);
 	}
 	const unique = [...new Set(urls)];
 	const media = unique.filter((url) => DM_MEDIA.test(url));
 	const links = unique.filter((url) => !DM_MEDIA.test(url));
-	return media.length || links.length ? { id, links, media } : null;
+	const reply = message.get(MESSAGE_REPLY);
+	const replyTo = reply instanceof Map && utf8(reply.get(REPLY_ID)) ? { id: utf8(reply.get(REPLY_ID)), text: utf8(reply.get(REPLY_TEXT)) || '' } : null;
+	return media.length || links.length || replyTo ? { id, links, media, replyTo } : null;
+}
+
+// A reply's message field 4 = { 2: the replied-to message's text, 6: its id }.
+const MESSAGE_REPLY = 4;
+const REPLY_TEXT = 2;
+const REPLY_ID = 6;
+
+// Message id -> { id, text } of the message it replies to. rettiwt rebuilds messages from a fixed set
+// of fields, so this travels on the side; read with replyFor(). Bounded: oldest entries go first.
+const replies = new Map();
+const MAX_REPLIES = 5000;
+
+function replyFor(messageId) {
+	return replies.get(String(messageId)) || null;
 }
 
 // For every unencrypted message: attached photos go into mediaUrls; a message with no text that
@@ -138,7 +155,13 @@ function fillMessages(events, messages) {
 	const byId = new Map();
 	for (const event of events) {
 		const found = sharedLinks(event);
-		if (found) byId.set(found.id, found);
+		if (!found) continue;
+		byId.set(found.id, found);
+		if (found.replyTo) {
+			replies.delete(found.id);
+			replies.set(found.id, found.replyTo);
+			if (replies.size > MAX_REPLIES) replies.delete(replies.keys().next().value);
+		}
 	}
 	for (const message of plain) {
 		const found = byId.get(String(message.id));
@@ -158,4 +181,4 @@ function install() {
 	decoder.decodeMessages = (events, options) => fillMessages(events || [], original(events, options));
 }
 
-module.exports = { install, sharedLinks, DM_MEDIA };
+module.exports = { install, sharedLinks, replyFor, DM_MEDIA };

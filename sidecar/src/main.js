@@ -41,7 +41,7 @@ const methods = {
 	ping: async () => ({ pong: true, demo: demoMode }),
 
 	init: async ({ apiKey }) => {
-		if (demoMode) return { ok: true };
+		if (demoMode) return demo.signIn(apiKey);
 		if (!apiKey) throw Object.assign(new Error('API key is empty'), { kind: 'auth' });
 		try {
 			client = new Rettiwt({ apiKey: apiKey.trim(), timeout: 20000, maxRetries: 1 });
@@ -134,6 +134,37 @@ const methods = {
 		if (demoMode) return demo.setMuted(String(id), Boolean(mute));
 		const action = mute ? 'create' : 'destroy';
 		await postForm(`https://x.com/i/api/1.1/mutes/users/${action}.json`, new URLSearchParams({ user_id: String(id) }));
+		return { ok: true };
+	},
+
+	// Your muted words (X's Settings → Muted words). {} -> { list: [{ id, keyword }] }
+	'mutedWords.list': async () => {
+		if (demoMode) return demo.mutedWords();
+		requireClient();
+		const res = await signedFetch(client, new URL('https://x.com/i/api/1.1/mutes/keywords/list.json'));
+		if (!res.ok) throw Object.assign(new Error(`Couldn’t load muted words (HTTP ${res.status})`), { status: res.status });
+		const body = await res.json();
+		return { list: (body.muted_keywords || []).map((k) => ({ id: String(k.id), keyword: k.keyword })), next: '' };
+	},
+
+	// Mute a word, phrase or #tag everywhere X applies muted words, with no time limit. { keyword } -> { ok }
+	'mutedWords.add': async ({ keyword }) => {
+		const word = String(keyword || '').trim();
+		if (!word) throw new Error('Type a word to mute');
+		if (word.length > MAX_MUTED_WORD) throw new Error(`A muted word can be at most ${MAX_MUTED_WORD} characters`);
+		if (demoMode) return demo.addMutedWord(word);
+		await postForm(
+			'https://x.com/i/api/1.1/mutes/keywords/create.json',
+			new URLSearchParams({ keyword: word, mute_surfaces: 'notifications,home_timeline,tweet_replies', mute_option: '', duration: '' }),
+		);
+		return { ok: true };
+	},
+
+	// { id } -> { ok }
+	'mutedWords.remove': async ({ id }) => {
+		if (!id) throw new Error('Missing muted word');
+		if (demoMode) return demo.removeMutedWord(String(id));
+		await postForm('https://x.com/i/api/1.1/mutes/keywords/destroy.json', new URLSearchParams({ ids: String(id) }));
 		return { ok: true };
 	},
 
@@ -503,6 +534,7 @@ const methods = {
 
 const TWEET_ACTIONS = new Set(['like', 'unlike', 'retweet', 'unretweet', 'bookmark', 'unbookmark']);
 const MAX_ALT_TEXT = 1000; // X's limit for image descriptions
+const MAX_MUTED_WORD = 140;
 // X's limits for the editable profile fields.
 const PROFILE_LIMITS = { name: 50, description: 160, location: 30, url: 100 };
 const PROFILE_LABELS = { name: 'Name', description: 'Bio', location: 'Location', url: 'Website' };

@@ -23,6 +23,7 @@ const TTL = {
 	'tweet.replies': 60,
 	'tweet.history': 600,
 	'tweet.translate': 86400,
+	'mutedWords.list': 300,
 	'tweet.engagers': 120,
 	'tweet.scheduled': 30,
 	'user.profile': 60,
@@ -74,6 +75,9 @@ const INVALIDATES = {
 	'dm.markRead': DM_READS,
 	'dm.markSeen': ['dm.inbox'],
 	'dm.deleteConversation': DM_READS,
+	'dm.react': DM_READS,
+	'mutedWords.add': ['mutedWords.list'],
+	'mutedWords.remove': ['mutedWords.list'],
 };
 // Calls that never touch the cache.
 const PASS_THROUGH = new Set(['ping', 'space.details', 'space.stream', 'dm.media']);

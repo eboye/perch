@@ -28,6 +28,48 @@ def get(key: str):
 
 def set(key: str, value) -> None:  # noqa: A001 - mirrors get()
     _values[key] = value
+    _save()
+
+
+# -- per-account values (what's been seen, drafts, pinned lists) -------------------------------
+
+_account: str | None = None  # the signed-in X account's user id
+# Values that used to be global (Perch ≤ 0.3.6, one account) and now belong to an account.
+_PER_ACCOUNT = ("notifications_seen_at", "drafts")
+
+
+def set_account(account_id: str | None) -> None:
+    global _account
+    _account = account_id
+
+
+def account_get(key: str, default=None):
+    if _account is None:
+        return _values.get(key, _DEFAULTS.get(key, default))
+    return (_values.get("by_account") or {}).get(_account, {}).get(key, default)
+
+
+def account_set(key: str, value) -> None:
+    if _account is None:
+        set(key, value)
+        return
+    by_account = dict(_values.get("by_account") or {})
+    by_account[_account] = {**by_account.get(_account, {}), key: value}
+    _values["by_account"] = by_account
+    _save()
+
+
+def adopt_legacy(account_id: str) -> None:
+    """Give the one account of an older Perch its global values (seen marker, drafts)."""
+    moved = {key: _values.pop(key) for key in _PER_ACCOUNT if _values.get(key)}
+    if moved:
+        by_account = dict(_values.get("by_account") or {})
+        by_account[account_id] = {**moved, **by_account.get(account_id, {})}
+        _values["by_account"] = by_account
+        _save()
+
+
+def _save() -> None:
     try:
         _PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = _PATH.with_suffix(".tmp")

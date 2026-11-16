@@ -172,6 +172,7 @@ class _MemberRow(UserRow):
 class _ListBodyView(PagedListView):
     error_title = "Couldn't load this list"
     always_show_list = True
+    hide_muted_words = True
 
     def __init__(self, controller, page: "ListPage"):
         self._page = page
@@ -233,6 +234,11 @@ class ListPage(Adw.NavigationPage):
         self._delete.connect("clicked", lambda *_: self._confirm_delete())
         headerbar.pack_end(self._delete)
         headerbar.pack_end(self._edit)
+        # Pin the list as a tab next to Following and For You.
+        self._pin = Gtk.ToggleButton(icon_name="view-pin-symbolic", active=controller.is_list_pinned(self.list_id))
+        self._sync_pin()
+        self._pin.connect("toggled", lambda button: (controller.set_list_pinned(self.list, button.get_active()), self._sync_pin()))
+        headerbar.pack_end(self._pin)
 
         view = Adw.ToolbarView(content=self._body)
         view.add_top_bar(headerbar)
@@ -280,6 +286,10 @@ class ListPage(Adw.NavigationPage):
         group.set_active_name(self._body.kind)
         group.connect("notify::active-name", lambda g, _p: self._body.set_kind(g.get_active_name()))
         self._header.append(group)
+
+    def _sync_pin(self) -> None:
+        pinned = self._pin.get_active()
+        self._pin.set_tooltip_text("Unpin from the Tabs" if pinned else "Pin as a Tab")
 
     def reload(self) -> None:
         self._controller.sidecar.call("list.details", {"id": self.list_id}, lambda lst, error: lst and self._fill(lst))

@@ -23,6 +23,8 @@ class PagedListView(Gtk.Stack):
     # Keep the list (and its header) on screen while loading, empty or failing, instead of switching
     # to the full-page spinner / empty / error pages. Used by the post page (header = the post).
     always_show_list = False
+    # Hide posts containing a muted word (timelines, lists, mentions: where X applies muted words).
+    hide_muted_words = False
 
     def __init__(self, controller):
         super().__init__(transition_type=Gtk.StackTransitionType.CROSSFADE)
@@ -151,7 +153,9 @@ class PagedListView(Gtk.Stack):
             if not key or key in self._seen:
                 continue
             self._seen.add(key)
-            self._list.append(self.make_row(item, result))
+            row = self.make_row(item, result)
+            self._list.append(row)
+            self._filter_row(row)
             added += 1
 
         next_cursor = result.get("next") or None
@@ -232,7 +236,24 @@ class PagedListView(Gtk.Stack):
         index = 0
         while row := self._list.get_row_at_index(index):
             if predicate(row):
+                row.hidden_by_author = True
                 row.set_visible(False)
+            index += 1
+
+    # -- muted words --------------------------------------------------------------
+
+    def _filter_row(self, row: Gtk.ListBoxRow) -> None:
+        """Hide a post that contains one of your muted words (views with ``hide_muted_words``)."""
+        if not self.hide_muted_words or not hasattr(row, "tweet"):
+            return
+        row.hidden_by_word = self._controller.hides_by_muted_word(row.tweet)
+        row.set_visible(not row.hidden_by_word and not getattr(row, "hidden_by_author", False))
+
+    def refilter(self) -> None:
+        """Muted words changed: re-check every loaded post (unmuting a word brings its posts back)."""
+        index = 0
+        while row := self._list.get_row_at_index(index):
+            self._filter_row(row)
             index += 1
 
     def scroll_to_top(self) -> None:

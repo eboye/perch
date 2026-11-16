@@ -10,6 +10,7 @@ from perch.edit_history import EditHistoryPage
 from perch.people import PeoplePage
 from perch.media_viewer import MediaViewer
 from perch.messages import ConversationPage, InboxView
+from perch.muted_words import MutedWordsPage, compile_words, matches
 from perch.notifications import NotificationsView
 from perch.paged_list import PagedListView
 from perch.poller import Poller
@@ -20,6 +21,7 @@ from perch.profile import ProfilePage
 from perch.profile_edit import ProfileEditDialog
 from perch.scheduled import ScheduledPage
 from perch.search import SearchPage
+from perch.list_tab import ListTabView
 from perch.lists import AddToListDialog, BookmarksPage, ListPage, ListsPage
 from perch.timeline import TimelineView
 from perch.tweet_detail import TweetDetailPage
@@ -45,6 +47,9 @@ class PerchWindow(Adw.ApplicationWindow):
         self.set_size_request(360, 400)
         self._sidecar = sidecar
         self._stale_toast_at = -60_000_000
+        self._muted_patterns: list = []  # compiled muted words (see on_muted_words)
+        self._adding_from: str | None = None  # account id while "Add Account…" is showing the sign-in page
+        self._signin_attempted = False  # a key was tried while adding (the sidecar must be re-signed)
         sidecar.on_stale = self._on_stale
         self._me: dict | None = None
         self._demo = False
@@ -102,6 +107,11 @@ class PerchWindow(Adw.ApplicationWindow):
         self._signin_button.add_css_class("suggested-action")
         self._signin_button.connect("clicked", lambda *_: self._submit_key())
         box.append(self._signin_button)
+        # While adding another account: back to the one that's signed in.
+        self._signin_cancel = Gtk.Button(label="Cancel", halign=Gtk.Align.CENTER, visible=False)
+        self._signin_cancel.add_css_class("flat")
+        self._signin_cancel.connect("clicked", lambda *_: self._cancel_add_account())
+        box.append(self._signin_cancel)
 
         page.set_child(Adw.Clamp(maximum_size=420, child=box))
         return self._toolbar(page)
@@ -163,8 +173,19 @@ class PerchWindow(Adw.ApplicationWindow):
     def _rebuild_menu(self) -> None:
         self._menu.remove_all()
         if self._me:
+            # Accounts: who you are, the others to switch to, add one, sign out of this one.
+            accounts = Gio.Menu()
+            accounts.append(f"Signed in as @{self._me.get('userName', '?')}", "win.noop")
+            if self._accounts_enabled():
+                for other in self._accounts():
+                    if other.get("id") != self.me_id:
+                        item = Gio.MenuItem.new(f"Switch to @{other.get('handle') or other.get('id')}", None)
+                        item.set_action_and_target_value("win.switch-account", GLib.Variant.new_string(other["id"]))
+                        accounts.append_item(item)
+                accounts.append("Add Account…", "win.add-account")
+                accounts.append("Sign Out", "win.sign-out")
+            self._menu.append_section(None, accounts)
             account = Gio.Menu()
-            account.append(f"Signed in as @{self._me.get('userName', '?')}", "win.noop")
             account.append("My Profile", "win.my-profile")
             account.append("Bookmarks", "win.bookmarks")
             account.append("Lists", "win.lists")
@@ -174,16 +195,15 @@ class PerchWindow(Adw.ApplicationWindow):
             people.append("Who to Follow", "win.suggestions")
             people.append("Muted Accounts", "win.muted")
             people.append("Blocked Accounts", "win.blocked")
+            people.append("Muted Words", "win.muted-words")
             self._menu.append_section(None, people)
         actions = Gio.Menu()
         actions.append("Open Space…", "win.open-space")
         actions.append("Desktop Notifications", "win.desktop-notifications")
         actions.append("Keyboard Shortcuts", "win.shortcuts")
-        if not self._demo:
-            actions.append("Sign Out", "win.sign-out")
         actions.append(f"About {APP_NAME}", "app.about")
         self._menu.append_section(None, actions)
-        # Closing the window only hides Perch; this (like the dock's Quit and Ctrl+Q) really exits.
+        # Closing the window only minimizes Perch; this (like the dock's Quit and Ctrl+Q) really exits.
         quit_section = Gio.Menu()
         quit_section.append(f"Quit {APP_NAME}", "app.quit")
         self._menu.append_section(None, quit_section)
@@ -242,11 +262,16 @@ class PerchWindow(Adw.ApplicationWindow):
             ("suggestions", lambda: self.open_suggestions()),
             ("muted", lambda: self.open_muted()),
             ("blocked", lambda: self.open_blocked()),
+            ("muted-words", lambda: self.open_muted_words()),
+            ("add-account", lambda: self.add_account()),
             ("shortcuts", lambda: self._show_shortcuts()),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda *_, h=handler: h())
             self.add_action(action)
+        switch = Gio.SimpleAction.new("switch-account", GLib.VariantType.new("s"))
+        switch.connect("activate", lambda _a, target: self.switch_account(target.get_string()))
+        self.add_action(switch)
         noop = Gio.SimpleAction.new("noop", None)
         noop.set_enabled(False)
         self.add_action(noop)
@@ -537,6 +562,72 @@ class PerchWindow(Adw.ApplicationWindow):
             self._toasts.add_toast(toast)
 
         self._sidecar.call("user.mute", {"id": user["id"], "mute": mute}, done)
+
+    # -- pinned lists (extra tabs) --------------------------------------------
+
+    def _pinned_lists(self) -> list[dict]:
+        return list(settings.account_get("pinned_lists") or [])
+
+    def is_list_pinned(self, list_id: str) -> bool:
+        return any(item.get("id") == list_id for item in self._pinned_lists())
+
+    def set_list_pinned(self, lst: dict, pinned: bool) -> None:
+        lists = [item for item in self._pinned_lists() if item.get("id") != lst["id"]]
+        if pinned:
+            lists.append({"id": lst["id"], "name": lst.get("name") or "List"})
+        settings.account_set("pinned_lists", lists)
+        self._rebuild_list_tabs()
+        self.toast(f"Pinned “{lst.get('name') or 'List'}” as a tab" if pinned else f"Unpinned “{lst.get('name') or 'List'}”")
+
+    def _rebuild_list_tabs(self) -> None:
+        """One tab per pinned list of the signed-in account, after Following / For You / … ."""
+        current = self._current_tab()
+        for name in [n for n in self._views if n.startswith("list-")]:
+            self._stack.remove(self._views.pop(name))
+        for lst in self._pinned_lists():
+            name = f"list-{lst['id']}"
+            view = ListTabView(self, lst)
+            view.connect("load-failed", self._on_load_failed)
+            self._views[name] = view
+            self._stack.add_titled_with_icon(view, name, lst.get("name") or "List", "view-list-bullet-symbolic")
+        if current in self._views:
+            self._stack.set_visible_child_name(current)
+
+    def on_account_ready(self) -> None:
+        """Signed in (or switched account): that account's pinned lists become tabs."""
+        self._rebuild_list_tabs()
+
+    def open_muted_words(self) -> None:
+        self._push_unique("muted-words", lambda: MutedWordsPage(self))
+
+    def load_muted_words(self) -> None:
+        def done(result, error):
+            if not error:
+                self.on_muted_words([w["keyword"] for w in result.get("list") or []])
+
+        self._sidecar.call("mutedWords.list", {}, done)
+
+    def on_muted_words(self, words: list[str]) -> None:
+        """Your muted words changed (or loaded): re-check every loaded post that honours them."""
+        self._muted_patterns = compile_words(words)
+        views = list(self._views.values())
+        pages = self._nav.get_navigation_stack()
+        for index in range(pages.get_n_items()):
+            stack = [pages.get_item(index)]
+            while stack:
+                widget = stack.pop()
+                if isinstance(widget, PagedListView) and widget not in views:
+                    views.append(widget)
+                child = widget.get_first_child()
+                while child is not None:
+                    stack.append(child)
+                    child = child.get_next_sibling()
+        for view in views:
+            if view.hide_muted_words:
+                view.refilter()
+
+    def hides_by_muted_word(self, tweet: dict) -> bool:
+        return matches(self._muted_patterns, tweet)
 
     def open_blocked(self) -> None:
         self._push_unique(
@@ -840,7 +931,7 @@ class PerchWindow(Adw.ApplicationWindow):
             return
         page = self._nav.get_visible_page()
         # A refresh always asks X (the sidecar otherwise reuses results for a short while).
-        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage, PeoplePage, EditHistoryPage, ScheduledPage)):
+        if isinstance(page, (ConversationPage, TweetDetailPage, ProfilePage, SearchPage, BookmarksPage, ListsPage, ListPage, PeoplePage, EditHistoryPage, ScheduledPage, MutedWordsPage)):
             self._sidecar.fresh(page.reload)
             return
         view = self._views[self._current_tab()]
@@ -863,18 +954,102 @@ class PerchWindow(Adw.ApplicationWindow):
         if view and not view.loaded_once:
             view.reload()
 
-    # -- sign in / out ------------------------------------------------------
+    # -- accounts ------------------------------------------------------------
+    #
+    # Each X account's key is in the keyring under its user id; settings["accounts"] lists them
+    # ({id, handle, name}) and settings["active_account"] is the one to start with. The sidecar talks
+    # to one account at a time: switching re-initialises it (which also empties its cache).
 
-    def _sign_out(self) -> None:
+    def _accounts_enabled(self) -> bool:
+        """Saved accounts are off in plain demo mode (no keys); on with a real account, or in demo
+        mode with PERCH_KEYRING=memory (UI tests)."""
+        return not self._demo or os.environ.get("PERCH_KEYRING") == "memory"
+
+    def _accounts(self) -> list[dict]:
+        return list(settings.get("accounts") or [])
+
+    def _remember_account(self, user: dict) -> None:
+        accounts = [a for a in self._accounts() if a.get("id") != user["id"]]
+        accounts.append({"id": user["id"], "handle": user.get("userName") or "", "name": user.get("fullName") or ""})
+        settings.set("accounts", accounts)
+        settings.set("active_account", user["id"])
+
+    def switch_account(self, account_id: str) -> None:
+        """Sign in to another saved account (its key is in the keyring)."""
+        if account_id == self.me_id:
+            return
+        account = next((a for a in self._accounts() if a.get("id") == account_id), None)
+        handle = (account or {}).get("handle", "")
+
+        def found(key):
+            if not key:
+                self.toast(f"No saved key for @{handle} — add the account again")
+                return
+            self._reset_session()
+            self._pages.set_visible_child_name("starting")
+            self._sign_in(key, persist=False, account_id=account_id)
+
+        keyring.lookup(account_id, found)
+
+    def add_account(self) -> None:
+        """The sign-in page, with a way back to the current account."""
+        self._adding_from = self.me_id
+        self._key_row.set_text("")
+        self._show_signin()
+
+    def _cancel_add_account(self) -> None:
+        previous, self._adding_from = self._adding_from, None
+        attempted, self._signin_attempted = self._signin_attempted, False
+        if previous and not attempted and self._me and self._me.get("id") == previous:
+            self._pages.set_visible_child_name("main")  # no key was tried: still signed in as before
+        elif previous:
+            # A key was tried (and failed): the sidecar has to be signed back in to the previous account.
+            self._pages.set_visible_child_name("starting")
+            self.switch_account_after_failure(previous)
+        else:
+            self._show_signin()
+
+    def switch_account_after_failure(self, account_id: str) -> None:
+        """A sign-in to another account failed: go back to the one that was signed in."""
+        self._me = None
+        keyring.lookup(account_id, lambda key: self._sign_in(key, persist=False, account_id=account_id) if key else self._show_signin())
+
+    def _reset_session(self) -> None:
+        """Before signing in as someone else: stop polling and audio, drop pages and loaded lists."""
         self._poller.stop()
         self.player.stop()
-        keyring.clear()
-        self._me = None
-        self._sidecar.sign_out(lambda *_: None)
         self._nav.pop_to_tag("home")
         for view in self._views.values():
             view.loaded_once = False
+        inbox = self._views["messages"]
+        inbox.unread_count = 0
+        inbox.newest_event_id = inbox.last_seen_event_id = None
+        for name in ("notifications", "messages"):
+            page = self._stack.get_page(self._views[name])
+            page.set_badge_number(0)
+            page.set_needs_attention(False)
+        self._muted_patterns = []
+
+    # -- sign in / out ------------------------------------------------------
+
+    def _sign_out(self) -> None:
+        """Sign out of the current account: forget its key; go to another saved account if any."""
+        current = self.me_id
+        if current:
+            keyring.clear(current)
+            settings.set("accounts", [a for a in self._accounts() if a.get("id") != current])
+        self._reset_session()
+        self._me = None
+        settings.set_account(None)
+        self._sidecar.sign_out(lambda *_: None)
         self._key_row.set_text("")
+        remaining = self._accounts()
+        if remaining and self._accounts_enabled():
+            settings.set("active_account", remaining[0]["id"])
+            self._pages.set_visible_child_name("starting")
+            self.switch_account_after_failure(remaining[0]["id"])
+            return
+        settings.set("active_account", None)
         self._show_signin()
 
     def _start(self) -> None:
@@ -889,17 +1064,24 @@ class PerchWindow(Adw.ApplicationWindow):
             self._start_status.set_child(None)
             return
         self._demo = bool(result.get("demo"))
-        if self._demo:
+        if self._demo and not self._accounts_enabled():
             self._sign_in("demo", persist=False)
         elif env_key := os.environ.get("PERCH_API_KEY"):
             self._sign_in(env_key, persist=False)
+        elif active := settings.get("active_account"):
+            keyring.lookup(active, lambda key: self._sign_in(key, persist=False, account_id=active) if key else self._start_legacy())
         else:
-            keyring.lookup(lambda key: self._sign_in(key, persist=False) if key else self._show_signin())
+            self._start_legacy()
+
+    def _start_legacy(self) -> None:
+        """No saved account: an older Perch's single key, if there is one (moved to its account after sign-in)."""
+        keyring.lookup(keyring.LEGACY, lambda key: self._sign_in(key, persist=True, legacy=True) if key else self._show_signin())
 
     def _show_signin(self, message: str | None = None) -> None:
         self._signin_error.set_label(message or "")
         self._signin_error.set_visible(bool(message))
         self._signin_button.set_sensitive(True)
+        self._signin_cancel.set_visible(bool(self._adding_from))
         self._pages.set_visible_child_name("signin")
         self._key_row.grab_focus()
 
@@ -909,20 +1091,44 @@ class PerchWindow(Adw.ApplicationWindow):
             self._show_signin("Paste your API key first.")
             return
         self._signin_button.set_sensitive(False)
+        if self._adding_from:
+            self._reset_session()
+            self._signin_attempted = True
         self._sign_in(key, persist=True)
 
-    def _sign_in(self, key: str, persist: bool) -> None:
+    def _sign_in(self, key: str, persist: bool, account_id: str | None = None, legacy: bool = False) -> None:
         def on_me(user, error: RpcError | None):
             if error:
                 self._on_signin_failed(error)
                 return
+            if account_id and user.get("id") != account_id:
+                # The saved key belongs to a different account than the one it was saved for.
+                self._on_signin_failed(RpcError("That key signs in to a different account", "auth"))
+                return
             self._me = user
-            if persist:
-                keyring.store(key, lambda ok: ok or self.toast("Couldn't save the key to the keyring"))
+            self._adding_from = None
+            self._signin_attempted = False
+            settings.set_account(user["id"])
+            if self._accounts_enabled():
+                if legacy:
+                    settings.adopt_legacy(user["id"])
+                self._remember_account(user)
+                if persist:
+                    label = f"Perch X API key (@{user.get('userName', '')})"
+
+                    def stored(ok):
+                        if not ok:
+                            self.toast("Couldn't save the key to the keyring")
+                        elif legacy:
+                            keyring.clear(keyring.LEGACY)
+
+                    keyring.store(user["id"], key, label, stored)
             self._rebuild_menu()
             self._pages.set_visible_child_name("main")
             self._ensure_loaded()
+            self.load_muted_words()
             self._poller.start()
+            self.on_account_ready()
 
         def on_init(_result, error: RpcError | None):
             if error:
@@ -942,8 +1148,13 @@ class PerchWindow(Adw.ApplicationWindow):
 
     def _on_load_failed(self, _view, error: RpcError) -> None:
         if error.kind == "auth":
-            self._sign_out()
-            self._show_signin("Your X session expired. Paste a fresh API key.")
+            handle = (self._me or {}).get("userName", "")
+            self._sign_out()  # forgets this account's key; another saved account takes over if there is one
+            message = f"The X session for @{handle} expired. Paste a fresh API key." if handle else "Your X session expired. Paste a fresh API key."
+            if self._pages.get_visible_child_name() == "signin":
+                self._show_signin(message)
+            else:
+                self.toast(message)
         elif error.kind == "rate_limit":
             self.toast("Rate limited by X — try again in a few minutes")
         else:

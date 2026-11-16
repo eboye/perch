@@ -97,11 +97,12 @@ class NotificationsView(PagedListView):
     empty_icon = "preferences-system-notifications-symbolic"
     # The All / Mentions switch sits above the rows, so the list stays on screen even when empty.
     always_show_list = True
+    hide_muted_words = True  # applies to the Mentions posts (notification rows have no post text)
 
     def __init__(self, controller):
         self.mode = "all"
         super().__init__(controller)
-        self._seen_at = settings.get("notifications_seen_at") or ""
+        self._seen_at = settings.account_get("notifications_seen_at") or ""
         self.newest_at = ""
         switch = Adw.ToggleGroup(halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=4)
         switch.add_css_class("round")
@@ -125,7 +126,7 @@ class NotificationsView(PagedListView):
             self._controller.sidecar.call("notifications.mentions", {"cursor": cursor}, callback)
             return
         if cursor is None:  # fresh load: unread dots relative to what was last marked seen
-            self._seen_at = settings.get("notifications_seen_at") or ""
+            self._seen_at = settings.account_get("notifications_seen_at") or ""
         self._controller.sidecar.call("notifications", {"cursor": cursor}, callback)
 
     def make_row(self, item: dict, page: dict) -> Gtk.ListBoxRow:
@@ -152,5 +153,5 @@ class NotificationsView(PagedListView):
 
     def mark_seen(self) -> None:
         """Remember the newest loaded notification as read (drives the tab badge and unread dots)."""
-        if self.newest_at and self.newest_at > (settings.get("notifications_seen_at") or ""):
-            settings.set("notifications_seen_at", self.newest_at)
+        if self.newest_at and self.newest_at > (settings.account_get("notifications_seen_at") or ""):
+            settings.account_set("notifications_seen_at", self.newest_at)

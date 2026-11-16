@@ -6,6 +6,7 @@ from perch.tweet_row import TweetRow
 
 class TimelineView(PagedListView):
     error_title = "Couldn't load the timeline"
+    hide_muted_words = True
 
     def __init__(self, controller, kind: str):
         self._kind = kind

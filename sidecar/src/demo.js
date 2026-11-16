@@ -154,9 +154,23 @@ function conversation(id) {
 	messages.splice(1, 0, { id: `${cid}-enc`, senderId: other.id, text: '', createdAt: iso(minutes + 30), isEncrypted: true, mediaUrls: [] });
 	// A message type Perch can't show (no text, no media, not encrypted).
 	if (cid === '1001-1003') messages.push({ id: `${cid}-blank`, senderId: other.id, text: '', createdAt: iso(minutes + 1), isEncrypted: false, mediaUrls: [] });
-	// A photo from the other person (served by dmMedia below).
+	// A photo from the other person (served by dmMedia below), a GIF, a reply and some reactions.
 	if (cid === '1001-1005') {
 		messages.push({ id: `${cid}-photo`, senderId: other.id, text: 'Here is the poster', createdAt: iso(minutes + 2), isEncrypted: false, mediaUrls: [DEMO_PHOTO_URL] });
+		messages.push({ id: `${cid}-gif`, senderId: other.id, text: '', createdAt: iso(minutes + 1), isEncrypted: false, mediaUrls: [DEMO_GIF_URL] });
+		messages.push({
+			id: `${cid}-reply`,
+			senderId: users[0].id,
+			text: 'Love it!',
+			createdAt: iso(minutes),
+			isEncrypted: false,
+			mediaUrls: [],
+			replyTo: { id: `${cid}-photo`, text: 'Here is the poster' },
+		});
+	}
+	for (const message of messages) {
+		message.replyTo = message.replyTo || null;
+		message.reactions = (demoReactions.get(message.id) || []).map(([emoji, senderId]) => ({ emoji, senderId }));
 	}
 	// A long conversation: enough recent messages for "Load Earlier Messages" to show.
 	if (cid === '1001-1002') {
@@ -261,6 +275,45 @@ function setMuted(id, mute) {
 const DEMO_PHOTO_URL = 'https://ton.x.com/i/ton/data/dm/1/2/demo-photo.png';
 const DEMO_PHOTO_PNG =
 	'iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAIAAAAuKetIAAAATklEQVR4nO3PAQkAIADAMBEr2dCoBjHGEbYGW/vc8bM5PidQE6gJ1ARqAjWBmkBNoCZQE6gJ1ARqAjWBmkBNoCZQE6gJ1ARqAjWBmkDtAbsWAgC3nm8oAAAAAElFTkSuQmCC';
+
+const DEMO_GIF_URL = 'https://video.twimg.com/dm_gif/1/demo.mp4';
+
+// Which demo user is signed in: key "demo" / "demo-1" is the first, "demo-2" the second (account tests).
+let demoAccount = 0;
+
+function signIn(apiKey) {
+	const match = /^demo-(\d)$/.exec(String(apiKey || ''));
+	if (apiKey && apiKey !== 'demo' && !match) throw Object.assign(new Error('not a valid demo key (use demo, demo-1 or demo-2)'), { kind: 'auth' });
+	demoAccount = match ? Math.max(0, Math.min(users.length - 1, Number(match[1]) - 1)) : 0;
+	return { ok: true };
+}
+
+// Reactions on demo messages, kept for the session: message id -> [[emoji, senderId]].
+const demoReactions = new Map([['1001-1005-photo', [['❤️', '1005'], ['❤️', '1001']]]]);
+
+function react(messageId, emoji, remove) {
+	const list = (demoReactions.get(messageId) || []).filter(([e, by]) => !(e === emoji && by === '1001'));
+	if (!remove) list.push([emoji, '1001']);
+	demoReactions.set(messageId, list);
+	return { ok: true };
+}
+
+// Muted words, kept for the session.
+let demoMutedWords = [{ id: '7001', keyword: 'spoilers' }];
+
+function mutedWords() {
+	return { list: demoMutedWords, next: '' };
+}
+
+function addMutedWord(keyword) {
+	demoMutedWords = [...demoMutedWords, { id: String(7000 + demoMutedWords.length + 2), keyword }];
+	return { ok: true };
+}
+
+function removeMutedWord(id) {
+	demoMutedWords = demoMutedWords.filter((w) => w.id !== id);
+	return { ok: true };
+}
 
 function dmMedia() {
 	return { type: 'image/png', data: DEMO_PHOTO_PNG };
@@ -394,6 +447,11 @@ function unschedule(id) {
 }
 
 module.exports = {
+	signIn,
+	react,
+	mutedWords,
+	addMutedWord,
+	removeMutedWord,
 	dmMedia,
 	translate,
 	blocked,
@@ -418,7 +476,7 @@ module.exports = {
 	notifications,
 	inbox,
 	conversation,
-	me: () => users[0],
+	me: () => users[demoAccount],
 	space: (id) => ({
 		id,
 		state: 'Running',

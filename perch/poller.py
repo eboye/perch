@@ -58,7 +58,7 @@ class Poller:
             print(f"[perch] notification poll failed: {error}")
             return
         items = result.get("list") or []
-        seen_at = settings.get("notifications_seen_at") or ""
+        seen_at = settings.account_get("notifications_seen_at") or ""
         unread = [i for i in items if seen_at and (i.get("receivedAt") or "") > seen_at]
         fresh = [i for i in items if i.get("id") not in self._known_notifications]
         self._known_notifications.update(i.get("id") for i in items)
