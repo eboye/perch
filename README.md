@@ -10,7 +10,7 @@ Timelines, notifications, direct messages and Spaces — in a fast, keyboard-fri
 [![Latest release](https://img.shields.io/github/v/release/eboye/perch?label=release)](https://github.com/eboye/perch/releases/latest)
 [![Flatpak build](https://github.com/eboye/perch/actions/workflows/flatpak-release.yml/badge.svg)](https://github.com/eboye/perch/actions/workflows/flatpak-release.yml)
 ![Platform: Linux](https://img.shields.io/badge/platform-Linux-informational)
-![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+[![License: MIT](https://img.shields.io/github/license/eboye/perch)](LICENSE)
 
 <img src="data/screenshots/timeline.png" width="760" alt="The Following timeline with a link preview">
 
@@ -198,5 +198,5 @@ Bugs and ideas go to the [issue tracker](https://github.com/eboye/perch/issues).
 
 ## License
 
-Perch is released under the MIT License. It builds on
+Perch is released under the [MIT License](LICENSE). It builds on
 [rettiwt-api](https://github.com/Rishikant181/Rettiwt-API) and the GNOME platform.
