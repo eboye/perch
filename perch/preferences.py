@@ -59,6 +59,13 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._sync_kinds(master.get_active())
         page.add(alerts)
 
+        posts = Adw.PreferencesGroup(title="Posts")
+        hide_ads = Adw.SwitchRow(title="Hide ads", subtitle="Posts X was paid to show. Otherwise they're marked “Ad”.", active=bool(settings.get("hide_ads")))
+        hide_ads.connect("notify::active", lambda r, _p: self._set("hide_ads", r.get_active(), controller.on_hide_ads_changed))
+        posts.add(hide_ads)
+        self.hide_ads_row = hide_ads
+        page.add(posts)
+
         look = Adw.PreferencesGroup(title="Window and Dock")
         start = _combo("Start on", None, START_CHOICES, settings.get("start_tab"))
         start.connect("notify::selected", lambda row, _p: self._set("start_tab", row.values[row.get_selected()]))

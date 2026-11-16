@@ -18,6 +18,7 @@ const inbox = require('./inbox');
 const demo = require('./demo');
 const { ResponseCache, isNetworkError } = require('./cache');
 const { expandLinks, parseLinkCard } = require('./links');
+const ads = require('./ads');
 const { mediaInfo, uploadChunked } = require('./media');
 const { parsePoll, voteForm, pollCardData, VOTE_URL, CREATE_URL } = require('./poll');
 const { TweetRequests } = require('rettiwt-api/dist/requests/Tweet');
@@ -57,6 +58,7 @@ const methods = {
 		if (!apiKey) throw Object.assign(new Error('API key is empty'), { kind: 'auth' });
 		try {
 			client = new Rettiwt({ apiKey: apiKey.trim(), timeout: 20000, maxRetries: 1 });
+			for (const service of [client.user, client.tweet, client.list]) ads.watch(service);
 		} catch (err) {
 			client = null;
 			throw Object.assign(new Error(`not a valid rettiwt API key (${err?.message || err})`), { kind: 'auth' });
@@ -79,8 +81,9 @@ const methods = {
 	timeline: async ({ kind, cursor }) => {
 		if (demoMode) return demo.timeline(kind, cursor);
 		const users = requireClient().user;
-		const data = kind === 'foryou' ? await users.recommended(cursor || undefined) : await users.followed(cursor || undefined);
-		return { list: data.list.map(serializeTweet), next: data.next };
+		// (ads are marked: see ads.js)
+		const { data, ads: promoted } = await ads.trackAds(() => (kind === 'foryou' ? users.recommended(cursor || undefined) : users.followed(cursor || undefined)));
+		return { list: ads.markAds(data.list.map(serializeTweet), promoted), next: data.next };
 	},
 
 	// { id } -> Tweet
@@ -285,8 +288,8 @@ const methods = {
 		if (!q) return { list: [], next: '' };
 		if (demoMode) return demo.searchPosts(q, mode, cursor);
 		const raw = mode === 'media' ? `${q} filter:media` : q;
-		const data = await requireClient().tweet.search({ includeWords: [raw], top: mode !== 'latest' }, 20, cursor || undefined);
-		return { list: data.list.map(serializeTweet), next: data.next };
+		const { data, ads: promoted } = await ads.trackAds(() => requireClient().tweet.search({ includeWords: [raw], top: mode !== 'latest' }, 20, cursor || undefined));
+		return { list: ads.markAds(data.list.map(serializeTweet), promoted), next: data.next };
 	},
 
 	// People search. { query, cursor? } -> { list: users, next }
@@ -338,8 +341,8 @@ const methods = {
 	// { id, cursor? } -> { list: posts, next }
 	'list.tweets': async ({ id, cursor }) => {
 		if (demoMode) return demo.searchPosts('list', 'latest', cursor);
-		const data = await requireClient().list.tweets(String(id), 20, cursor || undefined);
-		return { list: data.list.map(serializeTweet), next: data.next };
+		const { data, ads: promoted } = await ads.trackAds(() => requireClient().list.tweets(String(id), 20, cursor || undefined));
+		return { list: ads.markAds(data.list.map(serializeTweet), promoted), next: data.next };
 	},
 
 	// { id, cursor? } -> { list: users, next }

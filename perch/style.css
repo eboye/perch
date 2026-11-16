@@ -461,3 +461,12 @@ button.link-card-small picture {
 .link-card-title {
   font-size: 1em;
 }
+
+/* Ads: "Ad" where the time would be. */
+.ad-badge {
+  font-size: 0.8em;
+  font-weight: bold;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: alpha(currentColor, 0.1);
+}

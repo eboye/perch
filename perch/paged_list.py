@@ -270,13 +270,14 @@ class PagedListView(Gtk.Stack):
     # -- new posts pill ---------------------------------------------------------
 
     def count_new(self, items: list[dict]) -> int:
-        """How many of ``items`` (a fresh first page) are newer than everything loaded here."""
+        """How many of ``items`` (a fresh first page) are newer than everything loaded here
+        (ads don't count: they aren't new posts)."""
         loaded = [int(key) for key in self._seen if str(key).isdigit()]
         newest = max(loaded) if loaded else None
         return sum(
             1
             for item in items
-            if (key := self.item_id(item)) and key not in self._seen and str(key).isdigit() and (newest is None or int(key) > newest)
+            if (key := self.item_id(item)) and key not in self._seen and str(key).isdigit() and (newest is None or int(key) > newest) and not item.get("promoted")
         )
 
     def offer_new_posts(self, count: int) -> None:
@@ -372,14 +373,18 @@ class PagedListView(Gtk.Stack):
     # -- muted words --------------------------------------------------------------
 
     def _filter_row(self, row: Gtk.ListBoxRow) -> None:
-        """Hide a post that contains one of your muted words (views with ``hide_muted_words``)."""
-        if not self.hide_muted_words or not hasattr(row, "tweet"):
+        """Hide a post that contains one of your muted words (views with ``hide_muted_words``), or
+        an ad when ads are hidden (Preferences)."""
+        if not hasattr(row, "tweet"):
             return
-        row.hidden_by_word = self._controller.hides_by_muted_word(row.tweet)
-        row.set_visible(not row.hidden_by_word and not getattr(row, "hidden_by_author", False))
+        if self.hide_muted_words:
+            row.hidden_by_word = self._controller.hides_by_muted_word(row.tweet)
+        hidden_ad = getattr(row, "promoted", False) and getattr(self._controller, "hides_ads", lambda: False)()
+        row.set_visible(not getattr(row, "hidden_by_word", False) and not getattr(row, "hidden_by_author", False) and not hidden_ad)
 
     def refilter(self) -> None:
-        """Muted words changed: re-check every loaded post (unmuting a word brings its posts back)."""
+        """Muted words (or whether ads show) changed: re-check every loaded post (unmuting a word
+        brings its posts back)."""
         index = 0
         while row := self._list.get_row_at_index(index):
             self._filter_row(row)

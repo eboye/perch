@@ -32,6 +32,7 @@ Timelines, notifications, direct messages and Spaces — in a fast, keyboard-fri
 - Profiles with posts, replies, media, likes and highlights; followers and following lists
 - Search for posts and people, with filters (from, minimum likes, dates, language, no replies) and saved searches
 - Bookmarks, lists (pinnable as tabs), translation of posts in other languages
+- Ads are clearly marked — or hidden altogether with **Preferences → Hide ads**
 
 **Writing**
 - Posts, replies, quotes and threads, with drafts kept per post
@@ -146,6 +147,7 @@ opens is GitHub, and only when you choose to report a crash.
 | Crash reports | `…/cache/perch/crash` | Kinds of steps only — never posts, names, messages or links |
 
 Link previews come from X's own data for the post; Perch never fetches the linked page itself.
+Perch doesn't report ad views or clicks back to X.
 Crash reports are shown to you on the next start and are only sent if you copy them or open the
 prefilled GitHub issue yourself. **Preferences → Cache** clears saved data at any time.
 

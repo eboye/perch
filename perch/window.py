@@ -729,9 +729,8 @@ class PerchWindow(Adw.ApplicationWindow):
 
         self._sidecar.call("mutedWords.list", {}, done)
 
-    def on_muted_words(self, words: list[str]) -> None:
-        """Your muted words changed (or loaded): re-check every loaded post that honours them."""
-        self._muted_patterns = compile_words(words)
+    def _list_views(self) -> list[PagedListView]:
+        """Every list of posts open: the tabs, and those on pages (search, profiles, post pages…)."""
         views = list(self._views.values())
         pages = self._nav.get_navigation_stack()
         for index in range(pages.get_n_items()):
@@ -744,7 +743,20 @@ class PerchWindow(Adw.ApplicationWindow):
                 while child is not None:
                     stack.append(child)
                     child = child.get_next_sibling()
-        for view in views:
+        return views
+
+    def hides_ads(self) -> bool:
+        return bool(settings.get("hide_ads"))
+
+    def on_hide_ads_changed(self) -> None:
+        """Preferences: ads hidden or shown again, everywhere that's open."""
+        for view in self._list_views():
+            view.refilter()
+
+    def on_muted_words(self, words: list[str]) -> None:
+        """Your muted words changed (or loaded): re-check every loaded post that honours them."""
+        self._muted_patterns = compile_words(words)
+        for view in self._list_views():
             if view.hide_muted_words:
                 view.refilter()
 

@@ -133,6 +133,8 @@ function tweet(n, kind, nested = false) {
 			style: kind === 'foryou' ? 'small' : 'large',
 		};
 	}
+	// Ads (X marks them as promoted): one on Following, one on For You.
+	if ((kind === 'following' && n === 11) || (kind === 'foryou' && n === 7)) t.promoted = true;
 	if (n % 6 === 3) t.quoted = tweet(n + 50, kind, true);
 	if (n % 5 === 4) {
 		const original = tweet(n + 100, kind, true);

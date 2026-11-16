@@ -18,6 +18,7 @@ _DEFAULTS = {
     "dock_badge": True,
     "start_tab": "last",  # or a tab name: following, foryou, notifications, messages
     "image_cache_mb": 300,
+    "hide_ads": False,  # posts X was paid to show: marked "Ad" (False) or not shown (True)
     "notifications_seen_at": "",  # ISO time of the newest notification the user has looked at
 }
 

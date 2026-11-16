@@ -87,7 +87,7 @@ def _post_menu(tweet: dict, controller, on_deleted, on_translate=None) -> Gtk.Me
     return menu
 
 
-def _header(user: dict, created_at: str | None, controller=None, edited: bool = False, menu: Gtk.Widget | None = None) -> Gtk.Box:
+def _header(user: dict, created_at: str | None, controller=None, edited: bool = False, menu: Gtk.Widget | None = None, ad: bool = False) -> Gtk.Box:
     box = Gtk.Box(spacing=4)
     who = Gtk.Box(spacing=4)  # name + badge + handle: one click target for the profile
     name = _label(user.get("fullName") or user.get("userName") or "?", "heading", ellipsize=Pango.EllipsizeMode.END)
@@ -103,9 +103,16 @@ def _header(user: dict, created_at: str | None, controller=None, edited: bool = 
     link_to_profile(who, user, controller)
     box.append(who)
     box.append(Gtk.Box(hexpand=True))
-    when = _label(fmt.relative_time(created_at), "dim-label", "numeric")
-    when.set_tooltip_text(fmt.full_time(created_at))
-    box.append(when)
+    if ad:
+        # An ad (X was paid to show it): marked where the time would be, as on x.com.
+        marker = _label("Ad", "ad-badge")
+        marker.set_tooltip_text("Ad — X was paid to show this post. You can hide ads in Preferences.")
+        marker.update_property([Gtk.AccessibleProperty.LABEL], ["Ad"])
+        box.append(marker)
+    else:
+        when = _label(fmt.relative_time(created_at), "dim-label", "numeric")
+        when.set_tooltip_text(fmt.full_time(created_at))
+        box.append(when)
     if edited:
         marker = _label("· Edited", "dim-label", "edited-marker")
         marker.set_tooltip_text("This post was edited")
@@ -774,7 +781,8 @@ class TweetRow(Gtk.ListBoxRow):
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
         menu = _post_menu(shown, controller, self._on_deleted, self.translate) if hasattr(controller, "delete_post") else None
-        content.append(_header(user, shown.get("createdAt"), controller, edited=bool(shown.get("edited")), menu=menu))
+        self.promoted = bool(tweet.get("promoted"))
+        content.append(_header(user, shown.get("createdAt"), controller, edited=bool(shown.get("edited")), menu=menu, ad=self.promoted))
         if body := _body(shown, controller):
             content.append(body)
         # X's translation, under the original once asked for (⋯ → Translate Post).
