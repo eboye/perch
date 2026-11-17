@@ -156,12 +156,12 @@ def group_notifications(items: list[dict], users: dict) -> list[dict]:
 
 
 # Filters over the All list (no extra requests): which notification icons each one keeps.
-_FILTERS = {"likes": {"heart_icon"}, "reposts": {"retweet_icon"}, "follows": {"person_icon"}}
-_EMPTY = {"all": "No notifications yet", "mentions": "No mentions yet", "likes": "No likes yet", "reposts": "No reposts yet", "follows": "No new followers yet"}
+_FILTERS = {"likes": {"heart_icon"}, "reposts": {"retweet_icon"}, "follows": {"person_icon"}, "notes": {"birdwatch_icon"}}
+_EMPTY = {"all": "No notifications yet", "mentions": "No mentions yet", "likes": "No likes yet", "reposts": "No reposts yet", "follows": "No new followers yet", "notes": "No Community Notes yet"}
 
 
 class NotificationsView(PagedListView):
-    """All notifications (or just likes / reposts / follows among them), or (``mode='mentions'``)
+    """All notifications (or just likes / reposts / follows / Community Notes among them), or (``mode='mentions'``)
     the posts that mention you."""
 
     error_title = "Couldn't load notifications"
@@ -178,7 +178,7 @@ class NotificationsView(PagedListView):
         self.newest_at = ""
         switch = Adw.ToggleGroup(halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=4)
         switch.add_css_class("round")
-        for name, label in (("all", "All"), ("mentions", "Mentions"), ("likes", "Likes"), ("reposts", "Reposts"), ("follows", "Follows")):
+        for name, label in (("all", "All"), ("mentions", "Mentions"), ("likes", "Likes"), ("reposts", "Reposts"), ("follows", "Follows"), ("notes", "Notes")):
             switch.add(Adw.Toggle(name=name, label=label))
         switch.set_active_name("all")
         switch.connect("notify::active-name", lambda group, _p: self.set_mode(group.get_active_name()))

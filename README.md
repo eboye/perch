@@ -43,7 +43,7 @@ Timelines, notifications, direct messages and Spaces — in a fast, keyboard-fri
 
 **Messages and notifications**
 - Direct messages with photos, GIFs, replies, reactions, an unread filter and earlier history
-- Notifications grouped per post, with an excerpt, filterable by mentions, likes, reposts and follows
+- Notifications grouped per post, with an excerpt, filterable by mentions, likes, reposts, follows and Community Notes
 - Desktop notifications for the kinds you choose, and an unread count on the dock icon
 
 **Spaces**
