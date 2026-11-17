@@ -377,7 +377,7 @@ dialog .profile-avatar {
   padding: 2px 4px 2px 10px;
 }
 
-/* Small pill button inside list rows (Remove follower). */
+/* Small pill button inside list rows (Remove follower, Rate on X). */
 button.small-pill {
   min-height: 24px;
   padding: 2px 12px;

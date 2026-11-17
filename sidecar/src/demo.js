@@ -155,6 +155,7 @@ function notifications(cursor) {
 		person_icon: `https://twitter.com/${users[4].userName}`,
 		recommendation_icon: '/2/notifications/device_follow.json',
 		live_icon: 'https://x.com/i/spaces/1demoSpace',
+		birdwatch_icon: 'https://twitter.com/i/birdwatch/n/1demoNote?src=ntab',
 	};
 	// Two separate likes on the same post (900000): Perch shows them as one row.
 	const rows = [
@@ -163,6 +164,8 @@ function notifications(cursor) {
 		['heart_icon', [users[4]], 'Sam Okafor liked your post', 40, '900000'],
 		['recommendation_icon', [users[2]], 'New post notifications for Mira Chen', 64, null],
 		['live_icon', [users[3]], 'GNOME Fan Club is hosting a Space: GTK app design hangout', 95, null],
+		// Community Notes asks for a rating: no people, the post it's about comes from its context text.
+		['birdwatch_icon', [], 'Community Notes needs your help: is this note on a post helpful?', 120, '900014'],
 		['person_icon', [users[4]], 'Sam Okafor followed you', 300, null],
 	];
 	return {

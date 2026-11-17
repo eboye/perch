@@ -18,6 +18,7 @@ _ICONS = {
     "live_icon": ("audio-input-microphone-symbolic", "liked"),
     "recommendation_icon": ("starred-symbolic", "accent"),
     "bird_icon": ("dialog-information-symbolic", "accent"),
+    "birdwatch_icon": ("emoji-people-symbolic", "accent"),  # Community Notes
 }
 _DEFAULT_ICON = ("preferences-system-notifications-symbolic", "accent")
 MAX_AVATARS = 8  # people shown on one row
@@ -87,6 +88,13 @@ class NotificationRow(Gtk.ListBoxRow):
             excerpt.add_css_class("dim-label")
             excerpt.add_css_class("notification-post")
             content.append(excerpt)
+        # Community Notes: the row opens the post here; rating the note is only possible on X.
+        if self.icon == "birdwatch_icon" and self.url and "/birdwatch/" in self.url:
+            rate = Gtk.Button(label="Rate on X", halign=Gtk.Align.START, tooltip_text="Open the note on X to rate it")
+            rate.add_css_class("pill")
+            rate.add_css_class("small-pill")
+            rate.connect("clicked", lambda *_: Gtk.UriLauncher(uri=self.url).launch(self.get_root(), None, None, None))
+            content.append(rate)
         when = Gtk.Label(label=fmt.relative_time(item.get("receivedAt")), xalign=0, css_classes=["dim-label", "caption"])
         when.set_tooltip_text(fmt.full_time(item.get("receivedAt")))
         content.append(when)

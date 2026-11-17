@@ -78,6 +78,17 @@ function serializeMessage(message) {
 
 const byTime = (a, b) => new Date(a.createdAt) - new Date(b.createdAt);
 
+// What a notification without a target is about, from the text X adds under it: a Community Notes
+// "needs your help" notification quotes the post (an excerpt, then links to the post and the note).
+function contextPost(raw) {
+	const context = raw?.template?.additional_context;
+	if (!context || typeof context.text !== 'string') return { ids: [], text: null };
+	const entities = Array.isArray(context.entities) ? context.entities : [];
+	const ids = entities.map((e) => /\/status(?:es)?\/(\d+)/.exec(e?.ref?.url || '')?.[1]).filter(Boolean);
+	const firstLink = Math.min(context.text.length, ...entities.map((e) => (Number.isInteger(e?.fromIndex) ? e.fromIndex : Infinity)));
+	return { ids, text: ids.length ? context.text.slice(0, firstLink).trim() || null : null };
+}
+
 // rest_id -> text of every post in a GraphQL response (t.co links swapped for their real URLs).
 function postTexts(root) {
 	const texts = new Map();
@@ -206,16 +217,20 @@ function methods({ requireClient, demoMode }) {
 			const data = Extractors[resource](response.data);
 			// The posts the notifications are about come along in the response: their text, for an excerpt.
 			const texts = postTexts(response.data);
-			const list = data.list.map((n) => ({
-				id: n.id,
-				message: n.message,
-				receivedAt: n.receivedAt,
-				from: n.from,
-				target: n.target,
-				icon: n.raw?.notification_icon || null,
-				url: n.raw?.notification_url?.url || null,
-				postText: n.target.map((t) => texts.get(String(t))).find(Boolean) || null,
-			}));
+			const list = data.list.map((n) => {
+				const context = n.target.length ? { ids: [], text: null } : contextPost(n.raw);
+				const target = n.target.length ? n.target : context.ids;
+				return {
+					id: n.id,
+					message: n.message,
+					receivedAt: n.receivedAt,
+					from: n.from,
+					target,
+					icon: n.raw?.notification_icon || null,
+					url: n.raw?.notification_url?.url || null,
+					postText: target.map((t) => texts.get(String(t))).find(Boolean) || context.text,
+				};
+			});
 			const users = await lookupUsers(client, list.flatMap((n) => n.from.slice(0, 5)));
 			return { list, next: data.next || '', users };
 		},
@@ -463,4 +478,4 @@ function methods({ requireClient, demoMode }) {
 	};
 }
 
-module.exports = { methods, uploadDmImage };
+module.exports = { methods, uploadDmImage, contextPost };
