@@ -12,6 +12,7 @@ class ListTabView(PagedListView):
 
     def __init__(self, controller, lst: dict):
         self.list_id = lst["id"]
+        self.snapshot_kind = f"list-{lst['id']}"  # saved for the next start (see snapshot.py)
         super().__init__(controller)
 
     def fetch_page(self, cursor, callback) -> None:

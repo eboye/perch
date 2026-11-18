@@ -1,10 +1,12 @@
-"""What the timelines last showed, saved per account, so Perch opens instantly and where you left
+"""What the tabs last showed, saved per account, so Perch opens instantly and where you left
 off — even when X can't be reached.
 
 Files live in the cache folder (~/.var/app/<id>/cache/perch/snapshots/<account id>/ inside Flatpak):
-``me.json`` (your account, for the header and menu) and ``<timeline>.json``:
-{"saved_at", "items" (the posts loaded, newest first), "next" (cursor after them, or null),
-"anchor": {"id", "offset"} (the post at the top of the screen and how far it was scrolled)}.
+``me.json`` (your account, for the header and menu) and one per tab — ``following.json``,
+``foryou.json``, ``list-<id>.json`` (pinned lists), ``notifications.json``, ``messages.json``:
+{"saved_at", "items" (the rows loaded, newest first), "next" (cursor after them, or null),
+"anchor": {"id", "offset"} (the row at the top of the screen and how far it was scrolled),
+"users" (notifications and messages: the people their rows show)}.
 Signing out of an account deletes its folder.
 """
 
@@ -56,8 +58,10 @@ def load_me(account_id: str) -> dict | None:
     return user if isinstance(user, dict) and user.get("id") == str(account_id) else None
 
 
-def save_timeline(account_id: str, kind: str, items: list[dict], next_cursor: str | None, anchor: dict | None) -> None:
-    _write(_folder(account_id) / f"{kind}.json", {"saved_at": time.time(), "items": items, "next": next_cursor, "anchor": anchor})
+def save_timeline(account_id: str, kind: str, items: list[dict], next_cursor: str | None, anchor: dict | None, extra: dict | None = None) -> None:
+    """``extra``: what else the rows need, e.g. {"users": {id: user}} for notifications and messages."""
+    data = {**(extra or {}), "saved_at": time.time(), "items": items, "next": next_cursor, "anchor": anchor}
+    _write(_folder(account_id) / f"{kind}.json", data)
 
 
 def load_timeline(account_id: str, kind: str) -> dict | None:

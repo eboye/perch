@@ -992,11 +992,12 @@ class PerchWindow(Adw.ApplicationWindow):
     def on_notifications_polled(self, unread: int, has_new: bool) -> None:
         view = self._views["notifications"]
         visible = self._current_tab() == "notifications" and self._nav.get_visible_page().get_tag() == "home"
-        if has_new:
+        if has_new and view.loaded_once:
+            # The new ones come in where you are (no spinner): now if it's on screen, else when shown.
             if visible:
-                view.reload()
+                self._refresh_in_place(view)
             else:
-                view.loaded_once = False
+                view.stale = True
         if not visible:
             page = self._stack.get_page(view)
             page.set_badge_number(unread)
@@ -1008,12 +1009,12 @@ class PerchWindow(Adw.ApplicationWindow):
         open_id = getattr(open_page, "conversation_id", None)
         if open_id and open_id in incoming_ids:
             open_page.reload()
-        if incoming_ids:
+        if incoming_ids and inbox.loaded_once:
             if self._current_tab() == "messages" and open_id is None:
-                inbox.reload()
+                self._refresh_in_place(inbox)
             else:
-                inbox.loaded_once = False
-        if not inbox.loaded_once:
+                inbox.stale = True
+        if not inbox.loaded_once or inbox.stale:
             inbox.unread_count = sum(bool(c.get("unread")) for c in result.get("conversations") or [])
         if result.get("newestEventId"):
             inbox.newest_event_id = result["newestEventId"]
@@ -1140,10 +1141,13 @@ class PerchWindow(Adw.ApplicationWindow):
         if not self._signed_in():
             return
         view = self._views.get(self._current_tab())
-        if view and not view.loaded_once:
-            saved = snapshot.load_timeline(self.me_id, view.kind) if isinstance(view, TimelineView) else None
+        if view and view.loaded_once and view.stale:
+            self._refresh_in_place(view)  # newer came in while it was hidden
+        elif view and not view.loaded_once:
+            saved = snapshot.load_timeline(self.me_id, view.snapshot_kind) if view.snapshot_kind else None
             if saved:
-                # Where you left off; anything newer waits behind the new-posts pill.
+                # Where you left off; then what's newer: behind the new-posts pill (posts), or
+                # swapped in quietly (notifications, messages).
                 view.restore(saved)
                 view.restored_pending = not self._live  # checked once X answers (see _sign_in)
                 if self._live:
@@ -1222,6 +1226,7 @@ class PerchWindow(Adw.ApplicationWindow):
         self._nav.pop_to_tag("home")
         for view in self._views.values():
             view.loaded_once = False
+            view.stale = False
         inbox = self._views["messages"]
         inbox.unread_count = 0
         inbox.newest_event_id = inbox.last_seen_event_id = None
@@ -1338,7 +1343,7 @@ class PerchWindow(Adw.ApplicationWindow):
             self._pages.set_visible_child_name("main")
             self._ensure_loaded()
             for view in self._views.values():
-                if isinstance(view, TimelineView) and view.restored_pending:
+                if view.restored_pending:
                     self._check_newer(view)
             self.load_muted_words()
             self._poller.start()
@@ -1446,10 +1451,14 @@ class PerchWindow(Adw.ApplicationWindow):
             crash.note("x reachable")
             self._offline_banner.set_revealed(False)
 
-    def _check_newer(self, view: TimelineView) -> None:
-        """A timeline opened on its saved copy: ask X for its newest posts and offer the ones that
-        are newer than the copy with the new-posts pill (instead of moving you to the top)."""
+    def _check_newer(self, view: PagedListView) -> None:
+        """A tab opened on its saved copy, and X can be asked now. Posts (timelines, lists): offer
+        the ones newer than the copy with the new-posts pill (instead of moving you to the top).
+        Notifications and messages: swap in the fresh list, without a spinner."""
         view.restored_pending = False
+        if view.refresh_by == "replace":
+            self._refresh_in_place(view)
+            return
 
         def done(result, error):
             if error:
@@ -1461,20 +1470,32 @@ class PerchWindow(Adw.ApplicationWindow):
             items = result.get("list") or []
             view.offer_new_posts(view.count_new(items))
 
-        self._sidecar.fresh(self._sidecar.call, "timeline", {"kind": view.kind, "cursor": None}, done)
+        self._sidecar.fresh(view.fetch_page, None, done)
 
-    def save_timeline(self, view: TimelineView) -> None:
-        """Save a timeline's posts and place (called a moment after they change)."""
-        if not self._me or not view.loaded_once or self._pages.get_visible_child_name() != "main":
+    def _refresh_in_place(self, view: PagedListView) -> None:
+        """Swap in the fresh list where the current one is (no spinner); a failure leaves it as is."""
+
+        def failed(error) -> None:
+            if error.kind in ("network", "rate_limit"):
+                self.on_unreachable(error)
+            else:
+                view.emit("load-failed", error)
+
+        view.refresh_quietly(on_error=failed)
+
+    def save_view(self, view: PagedListView) -> None:
+        """Save a tab's rows and place for the next start (called a moment after they change)."""
+        if not self._me or not view.loaded_once or not view.snapshot_kind or self._pages.get_visible_child_name() != "main":
             return
-        items, cursor, anchor = view.saved_state(snapshot.MAX_ITEMS)
+        if view not in self._views.values():
+            return  # (only the tabs; not lists on pages like search or profiles)
+        items, cursor, anchor, extra = view.saved_state(snapshot.MAX_ITEMS)
         if items:
-            snapshot.save_timeline(self.me_id, view.kind, items, cursor, anchor)
+            snapshot.save_timeline(self.me_id, view.snapshot_kind, items, cursor, anchor, extra)
 
     def _save_timelines_now(self) -> None:
         for view in self._views.values():
-            if isinstance(view, TimelineView):
-                view.save_pending()
+            view.save_pending()
 
     def offer_crash_report(self, report: str) -> None:
         """The last run crashed: say so, show the report, and offer to send it (nothing is sent

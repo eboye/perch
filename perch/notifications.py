@@ -56,6 +56,7 @@ class NotificationRow(Gtk.ListBoxRow):
         self.icon = item.get("icon")
         # The people it's about (first one opens when there's no post or usable link).
         self.people = [users[uid] for uid in item.get("from") or [] if uid in users]
+        self.item = item  # (saved for the next start, with ``people``; see NotificationsView.saved_extra)
         super().__init__(activatable=bool(self.post_id or self.url))
         self.add_css_class("tweet")
         icon_name, css = _ICONS.get(item.get("icon") or "", _DEFAULT_ICON)
@@ -190,6 +191,21 @@ class NotificationsView(PagedListView):
     @property
     def empty_label(self) -> str:  # noqa: D401 - read by PagedListView
         return _EMPTY.get(self.mode, "No notifications yet")
+
+    # Saved for the next start (see snapshot.py): the All list (Likes, Follows… are filters of it),
+    # replaced by the fresh one as soon as X answers.
+    refresh_by = "replace"
+
+    @property
+    def snapshot_kind(self) -> str | None:  # noqa: D401 - read by PagedListView
+        return None if self.mode == "mentions" else "notifications"
+
+    def saved_extra(self, rows: list[Gtk.ListBoxRow]) -> dict:
+        return {"users": {person["id"]: person for row in rows for person in getattr(row, "people", []) if person.get("id")}}
+
+    def restore(self, saved: dict) -> None:
+        self._seen_at = settings.account_get("notifications_seen_at") or ""  # (unread dots)
+        super().restore(saved)
 
     def _source(self, mode: str) -> str:
         return "mentions" if mode == "mentions" else "all"

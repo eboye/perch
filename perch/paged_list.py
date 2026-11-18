@@ -27,6 +27,11 @@ class PagedListView(Gtk.Stack):
     always_show_list = False
     # Hide posts containing a muted word (timelines, lists, mentions: where X applies muted words).
     hide_muted_words = False
+    # Saved for the next start (see snapshot.py): the file name, or None for lists that aren't.
+    snapshot_kind: str | None = None
+    # Once X answers after opening on a saved copy: "pill" offers what's newer with the new-posts
+    # pill (post lists: you keep your place), "replace" swaps in the fresh list (notifications, messages).
+    refresh_by = "pill"
 
     def __init__(self, controller):
         super().__init__(transition_type=Gtk.StackTransitionType.CROSSFADE)
@@ -38,6 +43,9 @@ class PagedListView(Gtk.Stack):
         self._generation = 0  # bumps on reload so stale responses are dropped
         self._reload_for_more = False  # a saved copy without its cursor: Load More reloads (see restore)
         self._last_anchor: dict | None = None  # the post at the top of the screen when last looked
+        self.restored_pending = False  # opened on its saved copy before X answered (see window._check_newer)
+        self.stale = False  # loaded, but there's newer on X: refreshed in place when next shown
+        self._save_source = 0
         self.loaded_once = False
 
         spinner = Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, width_request=32, height_request=32)
@@ -73,6 +81,8 @@ class PagedListView(Gtk.Stack):
 
         self._scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, child=clamp, vexpand=True)
         self._scroller.connect("edge-reached", self._on_edge_reached)
+        # What's loaded and where you are is saved (see snapshot.py) a moment after it changes.
+        self._scroller.get_vadjustment().connect("value-changed", lambda *_: self.queue_save())
         # A pill over the top of the list for "N new posts" (timelines; see offer_new_posts).
         overlay = Gtk.Overlay(child=self._scroller)
         self._new_posts = Gtk.Button(halign=Gtk.Align.CENTER, valign=Gtk.Align.START, margin_top=10, visible=False, css_classes=["pill", "suggested-action", "new-posts"])
@@ -122,7 +132,64 @@ class PagedListView(Gtk.Stack):
         self.set_visible_child_name("list" if self.always_show_list else "loading")
         self._fetch()
 
-    # -- saved copies (timelines; see snapshot.py) ------------------------------------
+    # -- saved copies (see snapshot.py) -------------------------------------------------
+
+    def saved_item(self, row: Gtk.ListBoxRow) -> dict | None:
+        """What a row was made from, to save it (rows without one aren't saved)."""
+        return getattr(row, "item", None)
+
+    def saved_extra(self, rows: list[Gtk.ListBoxRow]) -> dict:
+        """Whatever else rebuilding the saved rows needs (e.g. the people they mention)."""
+        return {}
+
+    def queue_save(self) -> None:
+        if not self.snapshot_kind:
+            return
+        if self._save_source:
+            GLib.source_remove(self._save_source)
+        self._save_source = GLib.timeout_add(1500, self._save_now)
+
+    def _save_now(self) -> bool:
+        self._save_source = 0
+        self._controller.save_view(self)
+        return GLib.SOURCE_REMOVE
+
+    def save_pending(self) -> None:
+        """Save now if a save is waiting (closing to the dock, quitting)."""
+        if self._save_source:
+            GLib.source_remove(self._save_source)
+            self._save_now()
+
+    def refresh_quietly(self, on_error=None) -> None:
+        """Swap a saved copy for what X has now, leaving it on screen meanwhile (no spinner).
+        ``on_error(error)`` if that fails; the saved copy stays."""
+        self._generation += 1
+        generation = self._generation
+        self._loading = True
+        self.stale = False
+
+        def done(result, error) -> None:
+            if generation != self._generation:
+                return  # reloaded meanwhile
+            if error:
+                self._loading = False
+                self._retry_first = True  # "Load More" asks again
+                if on_error:
+                    on_error(error)
+                return
+            scroller = self._scroller.get_vadjustment()
+            at_top = scroller.get_value() <= 1
+            while row := self._list.get_row_at_index(0):
+                self._list.remove(row)
+                release(row)
+            self._seen.clear()
+            self._cursor = None
+            self._reload_for_more = False
+            self._on_page(generation, True, result, None)
+            if at_top:
+                self.scroll_to_top()
+
+        self.fetch_page(None, done)
 
     def restore(self, saved: dict) -> None:
         """Show a saved copy instead of loading: its posts, scrolled back to where you were."""
@@ -153,28 +220,29 @@ class PagedListView(Gtk.Stack):
         if anchor := saved.get("anchor"):
             self._keep_anchor(str(anchor.get("id")), float(anchor.get("offset") or 0))
 
-    def saved_state(self, limit: int) -> tuple[list[dict], str | None, dict | None]:
-        """(items, cursor after them, anchor) to save: the loaded posts, newest first, up to ``limit``
-        (more if that's what it takes to reach the post at the top of the screen)."""
-        rows, index = [], 0
+    def saved_state(self, limit: int) -> tuple[list[dict], str | None, dict | None, dict]:
+        """(items, cursor after them, anchor, extra) to save: the loaded rows' items, newest first,
+        up to ``limit`` (more if that's what it takes to reach the row at the top of the screen)."""
+        rows, items, index = [], [], 0
         while row := self._list.get_row_at_index(index):
-            if hasattr(row, "item"):
+            if (item := self.saved_item(row)) is not None:
                 rows.append(row)
+                items.append(item)
             index += 1
         # Off screen (another tab), rows have no position: keep the place from when it was shown.
         anchor = self._last_anchor
-        if (top := self.first_row_on_screen()) is not None and hasattr(top, "item"):
+        if (top := self.first_row_on_screen()) is not None and (top_item := self.saved_item(top)) is not None:
             ok, point = top.compute_point(self._scroller, Graphene.Point().init(0, 0))
-            anchor = self._last_anchor = {"id": self.item_id(top.item), "offset": round(point.y if ok else 0)}
+            anchor = self._last_anchor = {"id": self.item_id(top_item), "offset": round(point.y if ok else 0)}
         if anchor:
-            index = next((i for i, row in enumerate(rows) if self.item_id(row.item) == anchor["id"]), None)
+            index = next((i for i, item in enumerate(items) if self.item_id(item) == anchor["id"]), None)
             if index is None:
                 anchor = None
             else:
                 limit = max(limit, index + 30)
         kept = rows[:limit]
         cursor = self._cursor if len(kept) == len(rows) and not self._reload_for_more else None
-        return [row.item for row in kept], cursor, anchor
+        return items[:limit], cursor, anchor, self.saved_extra(kept)
 
     def _keep_anchor(self, anchor_id: str, offset: float) -> None:
         """Scroll so the post ``anchor_id`` sits where it was, and keep it there for the first
@@ -186,7 +254,7 @@ class PagedListView(Gtk.Stack):
             state["frames"] += 1
             if state["set"] is not None and abs(adjustment.get_value() - state["set"]) > 1:
                 return GLib.SOURCE_REMOVE  # you scrolled
-            row = next((r for r in self._all_rows() if hasattr(r, "item") and self.item_id(r.item) == anchor_id), None)
+            row = next((r for r in self._all_rows() if (item := self.saved_item(r)) is not None and self.item_id(item) == anchor_id), None)
             if row is None:
                 return GLib.SOURCE_REMOVE
             ok, point = row.compute_point(self._column, Graphene.Point().init(0, 0))
@@ -259,6 +327,7 @@ class PagedListView(Gtk.Stack):
         has_rows = self._list.get_row_at_index(0) is not None
         self._end_label.set_label(self.end_label if has_rows else self.empty_label)
         self.on_page_loaded(result, first)  # before the stack flips, so visibility listeners see final state
+        self.queue_save()
         self.set_visible_child_name("list" if has_rows or self.always_show_list else "empty")
 
     # -- misc ---------------------------------------------------------------
@@ -330,6 +399,7 @@ class PagedListView(Gtk.Stack):
             motion.play(row, "fresh", 1600)  # fades in, briefly tinted: these are the new ones
             position += 1
         self.scroll_to_top()
+        self.queue_save()
 
     # -- keyboard navigation (see window._on_key) ------------------------------
 

@@ -146,6 +146,25 @@ class InboxView(PagedListView):
     def make_row(self, item: dict, page: dict) -> ConversationRow:
         return ConversationRow(item, page.get("users") or {}, self._controller.me_id)
 
+    # Saved for the next start (see snapshot.py), replaced by the fresh inbox as soon as X answers.
+    snapshot_kind = "messages"
+    refresh_by = "replace"
+
+    def saved_item(self, row: ConversationRow) -> dict | None:
+        return row.conversation
+
+    def saved_extra(self, rows: list[ConversationRow]) -> dict:
+        users: dict = {}
+        for row in rows:
+            ids = {str(p.get("id") if isinstance(p, dict) else p) for p in row.conversation.get("participants") or []}
+            ids |= {str(m.get("senderId")) for m in [row.conversation.get("lastMessage") or {}] if m.get("senderId")}
+            users.update({uid: user for uid, user in row.users.items() if uid in ids} if ids else row.users)
+        return {"users": users}
+
+    def restore(self, saved: dict) -> None:
+        super().restore(saved)
+        self._recount()  # (the tab badge, until the fresh inbox comes)
+
     def on_page_loaded(self, page: dict, first: bool) -> None:
         if first:
             self.newest_event_id = page.get("newestEventId")
