@@ -157,7 +157,7 @@ class PerchWindow(Adw.ApplicationWindow):
         return self._toolbar(page)
 
     def _build_main(self) -> Gtk.Widget:
-        self._stack = Adw.ViewStack()
+        self._stack = Adw.ViewStack(enable_transitions=True)  # tabs cross-fade
         self._views: dict[str, PagedListView] = {
             "following": TimelineView(self, "following"),
             "foryou": TimelineView(self, "foryou"),

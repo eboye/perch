@@ -5,6 +5,7 @@ Subclasses implement ``fetch_page``, ``make_row`` and optionally ``item_id`` / `
 
 from gi.repository import Adw, GLib, GObject, Graphene, Gtk
 
+from perch import motion
 from perch.lifecycle import release
 from perch.sidecar import RpcError
 
@@ -285,7 +286,9 @@ class PagedListView(Gtk.Stack):
             return
         self._new_posts.set_label(f"↑ {count} new post{'s' if count != 1 else ''}")
         self._new_posts.set_tooltip_text("Show the new posts")
-        self._new_posts.set_visible(True)
+        if not self._new_posts.get_visible():
+            self._new_posts.set_visible(True)
+            motion.play(self._new_posts, "slide-in", 380)  # drops in from above
 
     def _show_new_posts(self) -> None:
         """Add the new posts above the ones already shown (no full reload), with a spinner in the
@@ -324,6 +327,7 @@ class PagedListView(Gtk.Stack):
             row = self.make_row(item, result)
             self._list.insert(row, position)
             self._filter_row(row)
+            motion.play(row, "fresh", 1600)  # fades in, briefly tinted: these are the new ones
             position += 1
         self.scroll_to_top()
 

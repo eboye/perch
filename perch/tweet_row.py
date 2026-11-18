@@ -5,7 +5,7 @@ import html
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
 from perch import format as fmt
-from perch import images
+from perch import images, motion
 from perch.focal_picture import FocalPicture
 
 
@@ -215,7 +215,7 @@ def _media_cell(
     picture.set_size_request(-1, height)
     picture.set_overflow(Gtk.Overflow.HIDDEN)
     picture.add_css_class("media")
-    images.load(fmt.media_thumb(media), lambda tex, p=picture: tex and p.set_paintable(tex))
+    motion.load_picture(fmt.media_thumb(media), picture)
     cell: Gtk.Widget = picture
     if media.get("type") in ("VIDEO", "GIF"):
         overlay = Gtk.Overlay(child=picture)
@@ -448,6 +448,10 @@ class ActionBar(Gtk.Box):
             self._refresh()
 
         apply(not was, max(0, old_count + (-1 if was else 1)))  # optimistic
+        if not was:  # liked / reposted / bookmarked: the icon pops
+            button = {"liked": self._like, "retweeted": self._repost, "bookmarked": self._bookmark}.get(flag)
+            if button is not None:
+                motion.play(button, "pop", 420)
         self._busy.add(flag)
 
         def done(_result, error) -> None:
@@ -621,7 +625,7 @@ def link_card(card: dict, controller=None) -> Gtk.Widget:
         else:
             picture = FocalPicture(width_request=96, height_request=96)
         picture.update_property([Gtk.AccessibleProperty.LABEL], [image.get("alt") or ""])
-        images.load(image["url"], lambda tex, p=picture: tex and p.set_paintable(tex))
+        motion.load_picture(image["url"], picture)
 
     if picture is not None and style in ("large", "player"):
         top: Gtk.Widget = picture

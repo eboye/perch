@@ -5,7 +5,7 @@ import re
 from gi.repository import Adw, Gtk, Pango
 
 from perch import format as fmt
-from perch import images, settings
+from perch import images, motion, settings
 from perch.paged_list import PagedListView
 from perch.tweet_row import TweetRow, link_to_profile
 
@@ -205,7 +205,8 @@ class NotificationsView(PagedListView):
         self.mode = mode
         self._placeholder.set_label(self.empty_label)
         if same_data and self.loaded_once:
-            self._list.invalidate_filter()  # Likes / Reposts / Follows: the All list, filtered
+            self._list.invalidate_filter()  # Likes / Reposts / Follows / Notes: the All list, filtered
+            motion.play(self._list, "refilter", 240)  # the filtered list fades in
         else:
             self.reload()
 

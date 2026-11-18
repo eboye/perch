@@ -4,7 +4,7 @@
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from perch import format as fmt
-from perch import images
+from perch import images, motion
 from perch.paged_list import PagedListView
 from perch.tweet_row import TweetRow
 
@@ -137,7 +137,7 @@ class ProfilePage(Adw.NavigationPage):
         banner = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True, height_request=150, hexpand=True)
         banner.add_css_class("profile-banner")
         banner_url = fmt.profile_banner_url(user.get("profileBanner"))
-        images.load(banner_url, lambda tex: tex and banner.set_paintable(tex), cache=False, disk=True)
+        motion.load_picture(banner_url, banner, cache=False, disk=True)
         top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         top.append(banner)
         action_row = Gtk.Box(halign=Gtk.Align.END, spacing=8, margin_end=16, margin_top=10, height_request=44)

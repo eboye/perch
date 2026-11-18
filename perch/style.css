@@ -470,3 +470,70 @@ button.link-card-small picture {
   border-radius: 6px;
   background: alpha(currentColor, 0.1);
 }
+
+/* Motion. One-shot animations start when perch/motion.py adds their class. GTK skips all of them
+   (and the transitions) when the desktop's "Reduce animation" setting is on. */
+
+/* Hovering a post or row, and a like / repost / bookmark changing colour, ease rather than snap. */
+.tweet-list > row,
+.tweet-action {
+  transition: background-color 150ms ease-out, color 200ms ease-out;
+}
+
+/* Liked / reposted / bookmarked: the icon pops. */
+@keyframes pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.35); }
+  70% { transform: scale(0.92); }
+  100% { transform: scale(1); }
+}
+
+.tweet-action.pop image {
+  animation: pop 420ms ease-out;
+}
+
+/* The "N new posts" pill drops in from above. */
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(-24px); }
+  to { opacity: 1; transform: none; }
+}
+
+button.new-posts.slide-in {
+  animation: slide-in 380ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+/* New posts (from the pill) fade in, tinted with the accent colour for a moment. */
+@keyframes fresh {
+  0% { opacity: 0; background-color: alpha(var(--accent-bg-color), 0.18); }
+  20% { opacity: 1; background-color: alpha(var(--accent-bg-color), 0.18); }
+  100% { opacity: 1; background-color: transparent; }
+}
+
+.tweet-list > row.fresh {
+  animation: fresh 1600ms ease-out;
+}
+
+/* Downloaded pictures fade in instead of popping into place. */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.fade-in {
+  animation: fade-in 260ms ease-out;
+}
+
+/* A notification filter (Likes, Follows, …): the filtered list fades in. */
+.refilter {
+  animation: fade-in 240ms ease-out;
+}
+
+/* A new message in a conversation slides up into place. */
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+.bubble-list > row.bubble-in {
+  animation: bubble-in 320ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}

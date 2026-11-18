@@ -8,7 +8,7 @@ from pathlib import Path
 from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Pango
 
 from perch import format as fmt
-from perch import images
+from perch import images, motion
 from perch.focal_picture import FocalPicture
 from perch.spelling import MessageBox
 from perch.paged_list import PagedListView
@@ -526,9 +526,12 @@ class ConversationPage(Adw.NavigationPage):
             return
         self._users.update(result.get("users") or {})
         added = False
+        arriving = bool(self._message_ids)  # (on the first load everything is new: no animation)
         for message in result.get("messages") or []:
             if message["id"] not in self._message_ids:
-                self._append(message)
+                bubble = self._append(message)
+                if arriving:
+                    motion.play(bubble, "bubble-in", 320)  # a new message slides up
                 added = True
         self._stack.set_visible_child_name("messages")
         if added:
@@ -709,6 +712,7 @@ class ConversationPage(Adw.NavigationPage):
         reply_info = {"id": replying["id"], "text": replying.get("text") or ""} if replying else None
         bubble = self._append({"id": local_id, "senderId": self._controller.me_id, "text": text, "createdAt": now, "localImage": image, "replyTo": reply_info})
         bubble.set_status("Sending…")
+        motion.play(bubble, "bubble-in", 320)
         self._stack.set_visible_child_name("messages")
         self._scroll_to_bottom()
 

@@ -3,7 +3,7 @@
 from gi.repository import Adw, GLib, Gtk, Pango
 
 from perch import format as fmt
-from perch import images
+from perch import motion
 from perch.paged_list import PagedListView
 from perch.search import UserRow
 from perch.tweet_row import TweetRow
@@ -262,7 +262,7 @@ class ListPage(Adw.NavigationPage):
 
         if lst.get("bannerUrl"):
             banner = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True, height_request=130, css_classes=["profile-banner"])
-            images.load(lst["bannerUrl"], lambda tex: tex and banner.set_paintable(tex), cache=False, disk=True)
+            motion.load_picture(lst["bannerUrl"], banner, cache=False, disk=True)
             self._header.append(banner)
 
         info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_start=16, margin_end=16, margin_top=12)
